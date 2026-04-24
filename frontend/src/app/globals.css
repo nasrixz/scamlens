@@ -5,3 +5,28 @@
 :root {
   color-scheme: dark;
 }
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-zinc-100 antialiased selection:bg-brand/30 selection:text-white;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-800 rounded-full hover:bg-zinc-700 transition-colors;
+}
+
+/* Base utility for text glow */
+.text-glow {
+  text-shadow: 0 0 20px theme('colors.brand.glow');
+}
