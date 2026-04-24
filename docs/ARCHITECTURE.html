@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>ScamLens — System Architecture</title>
+<style>
+@page { size: A4; margin: 20mm 18mm; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  font-family: -apple-system, "Inter", "Helvetica Neue", Arial, sans-serif;
+  color: #111;
+  max-width: 780px;
+  margin: 2rem auto;
+  line-height: 1.55;
+  font-size: 11.5pt;
+  padding: 0 1rem;
+}
+h1, h2, h3, h4 {
+  color: #111;
+  page-break-after: avoid;
+  line-height: 1.2;
+}
+h1 { font-size: 26pt; border-bottom: 2px solid #ef4444; padding-bottom: 0.3rem; margin-top: 1rem; }
+h2 { font-size: 18pt; margin-top: 2rem; color: #b91c1c; }
+h3 { font-size: 13pt; margin-top: 1.5rem; }
+hr { border: 0; border-top: 1px solid #ddd; margin: 2rem 0; }
+code {
+  font-family: "SF Mono", "Menlo", Consolas, monospace;
+  background: #f5f5f5;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  font-size: 0.92em;
+}
+pre {
+  background: #0b0b0f;
+  color: #e8e8ee;
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 9pt;
+  line-height: 1.35;
+  page-break-inside: avoid;
+}
+pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  font-size: 10pt;
+  page-break-inside: avoid;
+}
+th, td {
+  border: 1px solid #ddd;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: #f7f7f9; }
+blockquote {
+  border-left: 3px solid #ef4444;
+  padding: 0.3rem 1rem;
+  color: #444;
+  background: #fff6f5;
+  margin: 1rem 0;
+}
+header.cover {
+  border: 1px solid #eee;
+  padding: 2rem;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff 0%, #fafafa 100%);
+  margin-bottom: 2.5rem;
+}
+header.cover h1 { border: 0; margin: 0; font-size: 32pt; }
+header.cover .sub { color: #666; font-size: 14pt; margin-top: 0.5rem; }
+header.cover .meta { color: #888; font-size: 10pt; margin-top: 1rem; }
+a { color: #b91c1c; }
+ul, ol { padding-left: 1.4rem; }
+li { margin: 0.2rem 0; }
+.anchor { scroll-margin-top: 80px; }
+</style>
+</head>
+<body>
+<header class="cover"><h1>ScamLens — System Architecture</h1><div class="sub">AI-powered DNS that blocks scam websites</div><div class="meta">ScamLens · 2026-04-24</div></header>
+
+<h1>ScamLens — System Architecture</h1>
+
+<p>An AI-powered DNS resolver that sinkholes scam websites and verifies unknown domains in real time. Clients point their OS or router at ScamLens; known scams are blocked instantly, unknown domains get a multi-signal pipeline (whitelist → blocklist → cache → typosquat → domain age → AI content scan).</p>
+
+<hr/>
+
+<h2>1. High-level overview</h2>
+
+<p>ScamLens replaces a user&#x27;s DNS resolver. Every domain lookup is evaluated against six layered signals, ordered cheapest → most expensive. A request is answered from the first layer that fires, keeping latency low and AI spend minimal.</p>
+
+<pre><code>                          ┌───────────────────────┐
+      client device       │  DNS query (UDP/TCP   │
+   (phone, laptop,        │  or DNS-over-HTTPS)   │
+    router, IoT)          └──────────┬────────────┘
+                                     │
+                                     ▼
+                   ┌─────────────────────────────────┐
+                   │         ScamLens VPS            │
+                   │  ┌───────────────────────────┐  │
+                   │  │  nginx :80/:443           │  │
+                   │  │  - TLS terminate          │  │
+                   │  │  - reverse proxy          │  │
+                   │  └─────┬────────────┬────────┘  │
+                   │        │            │           │
+                   │   :53  │            │ :8053     │
+                   │ (UDP/  │            │ (DoH)     │
+                   │  TCP)  │            │           │
+                   │        ▼            ▼           │
+                   │  ┌───────────────────────────┐  │
+                   │  │      DNS SERVER           │  │
+                   │  │  (asyncio + dnslib)       │  │
+                   │  │                           │  │
+                   │  │   resolver pipeline       │  │
+                   │  │   ─────────────────       │  │
+                   │  │   1. bypass suffix        │  │
+                   │  │   2. whitelist            │  │
+                   │  │   3. blocklist            │  │
+                   │  │   4. redis cache          │  │
+                   │  │   5. typosquat detector   │  │
+                   │  │   6. enqueue → scan       │  │
+                   │  └───┬──────────┬────────┬───┘  │
+                   │      │          │        │      │
+                   │      ▼          ▼        ▼      │
+                   │  ┌──────┐  ┌───────┐ ┌───────┐  │
+                   │  │Redis │  │  PG   │ │Upstrm │  │
+                   │  │cache │  │ state │ │ 1.1.1 │  │
+                   │  └───┬──┘  └───┬───┘ └───────┘  │
+                   │      │         │                │
+                   │      ▼         │                │
+                   │  ┌──────────┐  │                │
+                   │  │AI SCANNER│  │                │
+                   │  │ Playwr + │  │                │
+                   │  │  Claude  │──┘                │
+                   │  │  + RDAP  │                   │
+                   │  └──────────┘                   │
+                   │                                 │
+                   │  ┌─────────────────────────┐    │
+                   │  │      FastAPI :8000      │    │
+                   │  │  /api/stats /blocked    │    │
+                   │  │  /api/report /check     │    │
+                   │  │  /api/setup/ios …       │    │
+                   │  │  /api/admin/*           │    │
+                   │  └─────────────────────────┘    │
+                   │                                 │
+                   │  ┌─────────────────────────┐    │
+                   │  │      Next.js :3000      │    │
+                   │  │  / /dashboard /setup    │    │
+                   │  │  /block /report /admin  │    │
+                   │  └─────────────────────────┘    │
+                   └─────────────────────────────────┘</code></pre>
+
+<hr/>
+
+<h2>2. Components</h2>
+
+<table><thead><tr><th>Service</th><th>Tech</th><th>Purpose</th></tr></thead><tbody><tr><td><code>dns_server</code></td><td>Python 3.12, asyncio, dnslib</td><td>UDP+TCP:53, DoH :8053. Runs the resolver pipeline.</td></tr><tr><td><code>ai_scanner</code></td><td>Python, Playwright, anthropic/google-genai</td><td>BRPOPs queue, RDAP age check, headless fetch, AI classify.</td></tr><tr><td><code>api</code></td><td>FastAPI, asyncpg, slowapi, bcrypt, PyJWT</td><td>Public REST + admin endpoints.</td></tr><tr><td><code>frontend</code></td><td>Next.js 15, Tailwind, SWR, recharts</td><td>Marketing, live dashboard, setup pages, admin UI.</td></tr><tr><td><code>postgres</code></td><td>Postgres 16</td><td>Truth store: blocklist, whitelist, verdicts, reports, admins.</td></tr><tr><td><code>redis</code></td><td>Redis 7</td><td>Hot cache for verdicts, scan queue, RDAP cache, rate limit.</td></tr><tr><td><code>nginx</code></td><td>nginx 1.24 (Ubuntu 24.04)</td><td>TLS, reverse proxy, DoH/DoT front, block-page router.</td></tr></tbody></table>
+
+<p>All containers share a private Docker network. Only DNS (<code>:53</code>) and nginx (<code>:80/443</code>, optional <code>:853</code>) are publicly exposed.</p>
+
+<hr/>
+
+<h2>3. Resolver pipeline (hot path)</h2>
+
+<p>Invoked on every DNS query. Returns as soon as any stage produces a verdict.</p>
+
+<pre><code>  ┌───────────────┐
+  │  incoming     │
+  │  DNS query    │
+  └───────┬───────┘
+          ▼
+  ┌────────────────────────┐       yes   ┌─────────────────────┐
+  │ 1. bypass suffix?      │ ──────────▶ │ forward upstream    │
+  │  (.arpa .local ...)    │             │  (Cloudflare 1.1.1) │
+  └───────┬────────────────┘             └─────────────────────┘
+          │ no
+          ▼
+  ┌────────────────────────┐       yes   ┌─────────────────────┐
+  │ 2. in whitelist?       │ ──────────▶ │ forward upstream    │
+  │  (parent-chain match)  │             │ NO scan             │
+  └───────┬────────────────┘             └─────────────────────┘
+          │ no
+          ▼
+  ┌────────────────────────┐       yes   ┌─────────────────────┐
+  │ 3. in blocklist?       │ ──────────▶ │  SINKHOLE           │
+  │  (parent-chain match)  │             │  log block          │
+  └───────┬────────────────┘             └─────────────────────┘
+          │ no
+          ▼
+  ┌────────────────────────┐  scam/sus   ┌─────────────────────┐
+  │ 4. Redis cache hit?    │ ──────────▶ │  SINKHOLE           │
+  │                        │  safe       │                     │
+  │                        │ ──────────▶ │  forward upstream   │
+  └───────┬────────────────┘             └─────────────────────┘
+          │ miss
+          ▼
+  ┌────────────────────────┐       yes   ┌─────────────────────┐
+  │ 5. typosquat detector  │ ──────────▶ │  SINKHOLE with      │
+  │  (homoglyph, edit      │             │  brand mimic label  │
+  │   distance, boundary)  │             └─────────────────────┘
+  └───────┬────────────────┘
+          │ no
+          ▼
+  ┌────────────────────────────────────┐
+  │ 6. forward upstream + enqueue scan │
+  │    (Redis LPUSH, rate-limited)     │
+  └────────────────────────────────────┘</code></pre>
+
+<h3>Typical latencies</h3>
+
+<table><thead><tr><th>Stage</th><th>Typical cost</th><th>Hit share</th></tr></thead><tbody><tr><td>Bypass suffix</td><td>~0.01 ms</td><td>~20%</td></tr><tr><td>Whitelist lookup</td><td>~0.02 ms</td><td>~95% (Tranco 10k + auxiliary)</td></tr><tr><td>Blocklist lookup</td><td>~0.02 ms</td><td>~1%</td></tr><tr><td>Redis cache</td><td>~0.5 ms</td><td>~3%</td></tr><tr><td>Typosquat detector</td><td>~0.1 ms</td><td>~0.05%</td></tr><tr><td>AI scan enqueue</td><td>~0.3 ms</td><td>~0.01%</td></tr></tbody></table>
+
+<p>End-to-end forwarding adds upstream RTT (typically 5–30 ms); blocking path never pays that.</p>
+
+<hr/>
+
+<h2>4. AI scan pipeline (cold path)</h2>
+
+<p>Unknown domains are enqueued on Redis list <code>scamlens:scan_queue</code>. The <code>ai_scanner</code> worker BRPOPs under a semaphore.</p>
+
+<pre><code>  Redis LPUSH ─────▶ BRPOP ──▶ worker ──▶
+                                   │
+                                   ▼
+                           ┌───────────────┐
+                           │ RDAP age      │
+                           │ (https://rdap │
+                           │  .org/domain) │
+                           └───────┬───────┘
+                                   │
+                  age &gt;= 365 days? │ yes
+               ┌───────────────────┴────────────┐
+               │ write &#x27;safe&#x27; verdict (conf 60) │
+               │ skip fetch + AI                │
+               └────────────────────────────────┘
+                                   │ no
+                                   ▼
+                           ┌────────────────┐
+                           │ Playwright     │
+                           │ headless fetch │
+                           │  - HTML        │
+                           │  - screenshot  │
+                           └───────┬────────┘
+                                   ▼
+                           ┌─────────────────────┐
+                           │ Claude / Gemini     │
+                           │ vision + text       │
+                           │ JSON verdict out    │
+                           └───────┬─────────────┘
+                                   ▼
+                          age &lt; 14d &amp; verdict=safe?
+                                   │ bump → suspicious
+                                   ▼
+                           ┌─────────────────────┐
+                           │ write Redis verdict │
+                           │ write PG verdict    │
+                           │ TTL: safe 24h,      │
+                           │   scam 7d, sus 5m   │
+                           └─────────────────────┘</code></pre>
+
+<h3>Signal layering rationale</h3>
+
+<ul><li><strong>RDAP age</strong> is binary-cheap (~50 ms, cached 90 days) and strong:</li></ul>
+<p>  scam domains are almost always freshly registered.</p>
+<ul><li><strong>Playwright</strong> runs only after RDAP doesn&#x27;t resolve it. Keeps AI in</li></ul>
+<p>  reserve for genuinely ambiguous unknowns.</p>
+<ul><li><strong>Age + verdict reconciliation</strong>: a domain registered 3 days ago that the</li></ul>
+<p>  AI called &quot;safe&quot; is still bumped to &quot;suspicious&quot; — base-rate prior.</p>
+
+<hr/>
+
+<h2>5. Data model (Postgres)</h2>
+
+<pre><code>┌──────────────────────┐
+│ blocked_attempts     │  append-only log
+├──────────────────────┤
+│ id BIGSERIAL PK      │
+│ domain TEXT          │
+│ reason TEXT          │
+│ verdict TEXT         │
+│ risk_score SMALLINT  │
+│ ai_confidence        │
+│ mimics_brand TEXT    │
+│ country TEXT         │
+│ client_ip INET       │
+│ created_at TIMESTAMPTZ│
+└──────────────────────┘
+
+┌──────────────────────┐
+│ domain_verdicts      │  upserted; long-term verdict cache
+├──────────────────────┤
+│ domain TEXT PK       │
+│ verdict TEXT         │
+│ risk_score SMALLINT  │
+│ confidence SMALLINT  │
+│ reasons JSONB        │
+│ mimics_brand TEXT    │
+│ source TEXT          │   blocklist|ai|user_report|typosquat
+│ updated_at           │
+└──────────────────────┘
+
+┌──────────────────────┐
+│ blocklist_seed       │  operator blocklist + confirmed reports
+├──────────────────────┤
+│ domain TEXT PK       │
+│ category TEXT        │
+│ added_at             │
+└──────────────────────┘
+
+┌──────────────────────┐
+│ whitelist            │  never-block list
+├──────────────────────┤
+│ domain TEXT PK       │
+│ reason TEXT          │   manual reason or &quot;tranco-rank-N&quot;
+│ added_by TEXT        │
+│ added_at             │
+└──────────────────────┘
+
+┌──────────────────────┐
+│ brand_domains        │  anchors for typosquat detector
+├──────────────────────┤
+│ domain TEXT PK       │
+│ brand TEXT           │
+│ category TEXT        │
+│ added_at             │
+└──────────────────────┘
+
+┌──────────────────────┐
+│ user_reports         │  crowd-sourced suggestions
+├──────────────────────┤
+│ id BIGSERIAL PK      │
+│ domain TEXT          │
+│ note TEXT            │
+│ reporter_ip INET     │
+│ status TEXT          │   pending|confirmed|rejected
+│ created_at           │
+└──────────────────────┘
+
+┌──────────────────────┐
+│ admins               │  operator accounts
+├──────────────────────┤
+│ id BIGSERIAL PK      │
+│ email TEXT UNIQUE    │
+│ password_hash TEXT   │   bcrypt
+│ role TEXT            │   admin
+│ created_at           │
+│ last_login_at        │
+└──────────────────────┘</code></pre>
+
+<h3>Refresh propagation</h3>
+
+<p>DNS server keeps <code>blocklist</code>, <code>whitelist</code>, <code>brand_domains</code> in memory. Every 5 minutes the <code>_refresh_lists_loop</code> pulls fresh copies from Postgres, so admin edits in the UI propagate automatically without a container restart.</p>
+
+<hr/>
+
+<h2>6. Redis layout</h2>
+
+<table><thead><tr><th>Key pattern</th><th>Type</th><th>TTL</th><th>Purpose</th></tr></thead><tbody><tr><td><code>verdict:&lt;domain&gt;</code></td><td>string</td><td>24h/7d/5m</td><td>Hot verdict cache; TTL by verdict</td></tr><tr><td><code>scamlens:scan_queue</code></td><td>list</td><td>–</td><td>FIFO of domains to scan</td></tr><tr><td><code>rl:&lt;domain&gt;</code></td><td>string</td><td>60s</td><td>Per-domain scan rate limit</td></tr><tr><td><code>rdap:&lt;registrable&gt;</code></td><td>string</td><td>90d</td><td>RDAP age cache</td></tr></tbody></table>
+
+<hr/>
+
+<h2>7. API surface</h2>
+
+<h3>Public</h3>
+
+<pre><code>GET  /api/stats                    live counters, top domains, 7-day series
+GET  /api/blocked?page&amp;page_size&amp;q  paginated block log
+POST /api/report                    user-submitted scam domain
+GET  /api/check/{domain}            on-demand lookup
+GET  /api/setup/ios                 .mobileconfig (DNS-over-HTTPS)
+GET  /api/setup/android             instructions JSON
+GET  /api/setup/desktop             instructions JSON</code></pre>
+
+<h3>Admin (JWT cookie session)</h3>
+
+<pre><code>POST   /api/admin/login             bcrypt verify + JWT
+POST   /api/admin/logout
+GET    /api/admin/me
+GET    /api/admin/counts            dashboard stats
+
+GET    /api/admin/reports?status_filter
+POST   /api/admin/reports/{id}/confirm   (atomic: → blocklist_seed)
+POST   /api/admin/reports/{id}/reject
+
+GET    /api/admin/blocklist
+POST   /api/admin/blocklist         also deletes from whitelist
+DELETE /api/admin/blocklist/{domain}
+
+GET    /api/admin/whitelist
+POST   /api/admin/whitelist         also deletes from blocklist
+DELETE /api/admin/whitelist/{domain}
+
+GET    /api/admin/brands
+POST   /api/admin/brands
+DELETE /api/admin/brands/{domain}</code></pre>
+
+<hr/>
+
+<h2>8. Typosquat detector</h2>
+
+<p>Deterministic, in-process, no external calls. Runs three strategies against every unknown domain before AI is considered.</p>
+
+<pre><code>  unknown domain
+       │
+       ▼
+  ┌─────────────────────────┐   yes   ┌──────────────────┐
+  │ exact label match?      │ ─────── │ not a squat,     │
+  │ (would be in whitelist) │         │ skip detector    │
+  └────────┬────────────────┘         └──────────────────┘
+           │ no
+           ▼
+  ┌─────────────────────────┐   yes   ┌──────────────────┐
+  │ homoglyph normalize     │ ─────── │ BLOCK + brand    │
+  │ (0→o, 1→l, rn→m, vv→w)  │         │   (homoglyph)    │
+  │ matches brand label?    │         └──────────────────┘
+  └────────┬────────────────┘
+           │ no
+           ▼
+  ┌─────────────────────────┐   yes   ┌──────────────────┐
+  │ Levenshtein ≤ max_d     │ ─────── │ BLOCK + brand    │
+  │ (max 1 short, 2 long)   │         │   (edit distance)│
+  └────────┬────────────────┘         └──────────────────┘
+           │ no
+           ▼
+  ┌─────────────────────────┐   yes   ┌──────────────────┐
+  │ brand appears as a      │ ─────── │ BLOCK + brand    │
+  │ token at boundary?      │         │   (impersonation)│
+  │ (start / end / &#x27;-_&#x27;)    │         └──────────────────┘
+  └────────┬────────────────┘
+           │ no
+           ▼
+      fall through to
+         AI scan</code></pre>
+
+<p>Matches proven on: <code>paypa1.com</code>, <code>paypaI.com</code>, <code>g00gle.com</code>, <code>paypal-secure-login.com</code>, <code>app1e-support.com</code>, <code>micros0ft-security.com</code>, <code>maybanc.com.my</code>, <code>rnaybank.com</code>, <code>paypal-software.io</code>.</p>
+
+<p>Correctly rejects: <code>google.com</code>, <code>apple.com</code>, <code>snapple.com</code>, <code>login.paypal.com</code>, <code>paypalsoftware.io</code> (no boundary).</p>
+
+<hr/>
+
+<h2>9. Network topology</h2>
+
+<pre><code>          INTERNET
+             │
+   ┌─────────┼──────────────┐
+   │         │              │
+   ▼         ▼              ▼
+  :53       :443          :853 (optional — DoT)
+   DNS      HTTPS         DoT
+   │         │              │
+   │         │              │
+   ▼         ▼              ▼
+  ┌─────────────────────────────────────┐
+  │             nginx                   │
+  │  - 80→443 redirect                  │
+  │  - DOMAIN           → Next.js :3000 │
+  │  - DOMAIN/api       → FastAPI :8000 │
+  │  - DNS_HOSTNAME     → DoH :8053     │
+  │  - default_server   → /block vhost  │
+  │  - :853 stream      → TCP :53       │
+  └──────────────┬──────────────────────┘
+                 │   (localhost only — 127.0.0.1)
+                 ▼
+       ┌───────────────────────┐
+       │   docker_default      │
+       │   bridge network      │
+       │                       │
+       │  dns_server  :53      │
+       │  api         :8000    │
+       │  ai_scanner  -        │
+       │  frontend    :3000    │
+       │  postgres    :5432    │
+       │  redis       :6379    │
+       └───────────────────────┘</code></pre>
+
+<p>UFW rules: <code>22/tcp</code>, <code>53/tcp+udp</code>, <code>80/tcp</code>, <code>443/tcp</code>, <code>853/tcp</code> (if DoT). Postgres/Redis are internal-only; they never get published ports.</p>
+
+<hr/>
+
+<h2>10. Security model</h2>
+
+<ul><li><strong>All public endpoints TLS-terminated at nginx.</strong> Let&#x27;s Encrypt certs,</li></ul>
+<p>  auto-renewed by <code>certbot.timer</code>, with a deploy hook to reload nginx.</p>
+<ul><li><strong>Admin auth</strong>: bcrypt password (cost 12 default) + HS256 JWT in an</li></ul>
+<p>  <code>HttpOnly; Secure; SameSite=Lax</code> cookie. JWT signed with a rotatable   secret (<code>JWT_SECRET</code>).</p>
+<ul><li><strong>CORS</strong>: locked to <code>DOMAIN</code>; browsers from other origins can&#x27;t reach</li></ul>
+<p>  <code>/api/*</code>.</p>
+<ul><li><strong>Rate limiting</strong> via slowapi:</li><li><code>POST /api/report</code> — 10/hour per IP</li><li><code>GET /api/check/{domain}</code> — 30/hour per IP</li><li><code>POST /api/admin/login</code> — 20/hour per IP</li><li><strong>Admin writes are atomic</strong>: confirming a report and inserting into</li></ul>
+<p>  <code>blocklist_seed</code> happen in one Postgres transaction.</p>
+<ul><li><strong>Hostile-site hardening</strong>: Playwright runs headless, downloads disabled,</li></ul>
+<p>  media/font requests aborted, ignore_https_errors on (scam sites often   have broken TLS), size-capped HTML + screenshot before hitting AI.</p>
+<ul><li><strong>Input validation</strong>: all incoming domains normalized and regex-checked</li></ul>
+<p>  before any Redis/PG key usage.</p>
+
+<hr/>
+
+<h2>11. Deployment</h2>
+
+<p>Target: Ubuntu 22.04 or 24.04 LTS, dedicated IPv4, ≥ 2 GB RAM.</p>
+
+<pre><code>  git clone &lt;repo&gt; /opt/scamlens
+  cp .env.example .env
+  # fill DOMAIN, DNS_HOSTNAME, BLOCK_PAGE_IP, LE_EMAIL, passwords, API key
+  sudo bash scripts/setup_vps.sh</code></pre>
+
+<p><code>setup_vps.sh</code> is idempotent — safe to re-run. Steps:</p>
+
+<ol><li>Install Docker Engine + Compose plugin</li><li>Install nginx, certbot, ufw</li><li>Configure UFW</li><li>Render nginx config from template</li><li>Bootstrap HTTP-only nginx for Let&#x27;s Encrypt webroot challenge</li><li>Issue certs for <code>DOMAIN</code> and <code>DNS_HOSTNAME</code></li><li>Install nginx renewal hook</li><li>Install + enable systemd unit</li><li><code>docker compose up -d</code></li><li>Seed blocklist</li><li>Smoke-test DNS / DoH / API / HTTPS</li></ol>
+
+<h3>Post-deploy</h3>
+
+<pre><code>docker compose exec api python -m scripts.create_admin you@example.com
+docker compose exec api python -m scripts.import_tranco --top 10000</code></pre>
+
+<p>Weekly Tranco refresh via cron:</p>
+
+<pre><code>0 3 * * 1 cd /opt/scamlens &amp;&amp; docker compose exec -T api \
+  python -m scripts.import_tranco --top 10000 &amp;&amp; \
+  docker compose restart dns_server</code></pre>
+
+<hr/>
+
+<h2>12. Cost model</h2>
+
+<p>Assume 1 million queries per day on a modest deployment:</p>
+
+<table><thead><tr><th>Stage</th><th>Queries</th><th>AI calls</th><th>Notes</th></tr></thead><tbody><tr><td>Bypass (.arpa/.local)</td><td>200k</td><td>0</td><td>Skipped entirely</td></tr><tr><td>Whitelist (Tranco 10k + aux)</td><td>700k</td><td>0</td><td>In-memory set hit</td></tr><tr><td>Blocklist</td><td>10k</td><td>0</td><td>In-memory set hit</td></tr><tr><td>Cache hit</td><td>70k</td><td>0</td><td>Redis GET</td></tr><tr><td>Typosquat</td><td>5k</td><td>0</td><td>In-process</td></tr><tr><td>RDAP aged ≥ 1yr</td><td>12k</td><td>0</td><td>RDAP cached 90d</td></tr><tr><td>AI scan (young + unknown)</td><td>3k</td><td>3k</td><td>~$0.01–0.03 per scan</td></tr><tr><td><strong>Total</strong></td><td><strong>1 M</strong></td><td><strong>~3k</strong></td><td>~0.3 % of traffic</td></tr></tbody></table>
+
+<p>Monthly AI spend at 1M/day → roughly <strong>$30–90/mo</strong>, scaling sub-linearly with traffic because Tranco + RDAP caches improve with repetition.</p>
+
+<hr/>
+
+<h2>13. Scaling considerations</h2>
+
+<ul><li><strong>Vertical first</strong>: dns_server is asyncio single-process; scale the VPS</li></ul>
+<p>  before sharding. A 2-vCPU box handles ~3k DNS qps.</p>
+<ul><li><strong>Horizontal DNS</strong>: run multiple <code>dns_server</code> replicas behind anycast</li></ul>
+<p>  or round-robin A records; they share Postgres/Redis state.</p>
+<ul><li><strong>Scanner concurrency</strong>: <code>SCAN_CONCURRENCY=2</code> ≈ 2 Chromium tabs ≈ 300 MB</li></ul>
+<p>  RAM. Tune up to memory limit.</p>
+<ul><li><strong>Postgres</strong>: read-heavy workload (lists refresh + API). Add a read</li></ul>
+<p>  replica before an HA primary.</p>
+<ul><li><strong>Redis</strong>: append-only enabled; persist critical. A hot-standby replica</li></ul>
+<p>  takes over in &lt; 5s.</p>
+<ul><li><strong>Geo</strong>: deploy regional instances and publish different DoH hostnames</li></ul>
+<p>  per region for lower RTT.</p>
+
+<hr/>
+
+<h2>14. Telemetry</h2>
+
+<p><code>dns_server</code> and <code>ai_scanner</code> emit structured JSON logs (structlog + JSON renderer) suitable for Loki / CloudWatch / Elastic. Key event names:</p>
+
+<pre><code>boot                      startup
+lists_loaded              initial refresh done
+lists_refreshed           periodic refresh
+blocked                   blocklist or cache-driven block
+blocked_typosquat         typosquat-driven block with brand
+scan_enqueued             DNS put domain on scan queue
+scan_start                scanner picked it up
+scan_age                  RDAP lookup result
+scan_skip_aged            skipped AI — aged domain
+scan_fetch_failed         Playwright couldn&#x27;t load page
+scan_done                 AI verdict written</code></pre>
+
+<hr/>
+
+<h2>15. Known limits and roadmap</h2>
+
+<table><thead><tr><th>Gap</th><th>Mitigation</th></tr></thead><tbody><tr><td>Unsigned iOS profile</td><td>Acceptable — install UI shows &quot;Not Signed&quot;;</td></tr><tr><td></td><td>signed profile needs an iOS-trusted CA.</td></tr><tr><td>No DoT on default install</td><td>Optional stream block for port 853 documented.</td></tr><tr><td>RDAP availability varies</td><td>Unknown-age domains fall back to full AI scan.</td></tr><tr><td>No automated feed ingest</td><td>Tranco weekly cron covers popularity; URLhaus</td></tr><tr><td></td><td>/ OpenPhish import TBD.</td></tr><tr><td>Single-instance Postgres</td><td>Fine for early ops; document replica setup.</td></tr></tbody></table>
+
+<hr/>
+
+<p><em>End of document.</em></p>
+</body>
+</html>
