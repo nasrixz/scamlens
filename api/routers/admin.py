@@ -2,8 +2,6 @@
 
 All routes except /login require a valid admin session (cookie or Bearer).
 """
-from __future__ import annotations
-
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
