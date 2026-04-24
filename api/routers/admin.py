@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth import (
@@ -81,8 +81,8 @@ class CountsResponse(BaseModel):
 @limiter.limit("20/hour")
 async def login(
     request: Request,
-    body: LoginRequest,
     response: Response,
+    body: LoginRequest = Body(...),
     cfg=Depends(get_cfg),
     pool=Depends(get_pool),
 ):
