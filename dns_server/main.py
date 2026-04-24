@@ -17,6 +17,7 @@ from .config import Config
 from .db import Database
 from .resolver import Resolver
 from .servers import start_doh, start_tcp, start_udp
+from .typosquat import TyposquatDetector
 from .upstream import UpstreamResolver
 
 
@@ -34,16 +35,35 @@ def _setup_logging(level: str) -> None:
     )
 
 
-async def _refresh_blocklist_loop(db: Database, blocklist: set[str], interval: int = 300):
+async def _refresh_lists_loop(
+    db: Database,
+    blocklist: set[str],
+    whitelist: set[str],
+    typosquat: TyposquatDetector,
+    interval: int = 300,
+):
     log = structlog.get_logger()
     while True:
         try:
-            rows = await db.load_blocklist()
+            bl = await db.load_blocklist()
             blocklist.clear()
-            blocklist.update(rows)
-            log.info("blocklist_refreshed", count=len(blocklist))
+            blocklist.update(bl)
+
+            wl = await db.load_whitelist()
+            whitelist.clear()
+            whitelist.update(wl)
+
+            brands = await db.load_brand_domains()
+            typosquat.__init__({d: b for d, b in brands})
+
+            log.info(
+                "lists_refreshed",
+                blocklist=len(blocklist),
+                whitelist=len(whitelist),
+                brands=len(brands),
+            )
         except Exception as exc:
-            log.warning("blocklist_refresh_failed", error=str(exc))
+            log.warning("lists_refresh_failed", error=str(exc))
         await asyncio.sleep(interval)
 
 
@@ -60,18 +80,26 @@ async def run() -> None:
     cache = VerdictCache(redis, cfg.scan_queue_key)
     upstream = UpstreamResolver(cfg.upstream_dns, cfg.upstream_dns_fallback)
     blocklist: set[str] = set(await db.load_blocklist())
-    log.info("blocklist_loaded", count=len(blocklist))
-    resolver = Resolver(cfg, cache, db, upstream, blocklist)
+    whitelist: set[str] = set(await db.load_whitelist())
+    brand_rows = await db.load_brand_domains()
+    typosquat = TyposquatDetector({d: b for d, b in brand_rows})
+    log.info(
+        "lists_loaded",
+        blocklist=len(blocklist),
+        whitelist=len(whitelist),
+        brands=len(brand_rows),
+    )
+    resolver = Resolver(cfg, cache, db, upstream, blocklist, whitelist, typosquat)
 
     # Listeners
     udp = await start_udp(resolver, cfg.bind_host, cfg.dns_port)
     tcp = await start_tcp(resolver, cfg.bind_host, cfg.dns_port)
     doh = await start_doh(resolver, cfg.bind_host, cfg.doh_port)
 
-    # Background blocklist refresh so reports/AI verdicts in Postgres
-    # get promoted to the in-memory set without a restart.
+    # Background refresh: pulls blocklist + whitelist + brand list from
+    # Postgres every 5 minutes so admin edits propagate without a restart.
     refresh_task = asyncio.create_task(
-        _refresh_blocklist_loop(db, blocklist, interval=300)
+        _refresh_lists_loop(db, blocklist, whitelist, typosquat, interval=300)
     )
 
     # Graceful shutdown

@@ -20,7 +20,8 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-export const fetcher = (path: string) => apiGet(path);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const fetcher = (path: string): Promise<any> => apiGet(path);
 
 // --- Types ---------------------------------------------------------------
 

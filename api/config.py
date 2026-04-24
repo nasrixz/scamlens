@@ -17,6 +17,8 @@ class Config:
     profile_identifier: str
     cors_origins: list[str]
     unknown_ttl: int
+    jwt_secret: str
+    jwt_ttl_hours: int
     log_level: str
 
     @classmethod
@@ -35,6 +37,8 @@ class Config:
             profile_identifier=os.getenv("PROFILE_IDENTIFIER", "com.scamlens.dns"),
             cors_origins=[o.strip() for o in origins.split(",") if o.strip()],
             unknown_ttl=int(os.getenv("UNKNOWN_TTL_SECONDS", "300")),
+            jwt_secret=os.getenv("JWT_SECRET", ""),
+            jwt_ttl_hours=int(os.getenv("JWT_TTL_HOURS", "12")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
 

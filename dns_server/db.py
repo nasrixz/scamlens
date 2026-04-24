@@ -42,6 +42,29 @@ class Database:
         )
         return [r["domain"] for r in rows]
 
+    async def load_whitelist(self) -> list[str]:
+        """Domains that should skip all checks + AI scans."""
+        if not self._pool:
+            return []
+        try:
+            rows = await self._pool.fetch("SELECT domain FROM whitelist")
+            return [r["domain"] for r in rows]
+        except Exception:
+            # Table may not exist yet on older deployments.
+            return []
+
+    async def load_brand_domains(self) -> list[tuple[str, str]]:
+        """(domain, brand) rows for typosquat detection."""
+        if not self._pool:
+            return []
+        try:
+            rows = await self._pool.fetch(
+                "SELECT domain, brand FROM brand_domains"
+            )
+            return [(r["domain"], r["brand"]) for r in rows]
+        except Exception:
+            return []
+
     async def log_block(
         self,
         domain: str,

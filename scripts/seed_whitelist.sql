@@ -1,0 +1,132 @@
+-- Official legit domains — never block, never scan.
+-- Also seed brand_domains (used for typosquat detection).
+--
+-- Apply:
+--   docker compose exec -T postgres \
+--     psql -U $POSTGRES_USER -d $POSTGRES_DB < scripts/seed_whitelist.sql
+
+-- Tech giants
+INSERT INTO whitelist (domain, reason) VALUES
+  ('google.com', 'official'), ('youtube.com', 'official'),
+  ('gmail.com', 'official'), ('googleusercontent.com', 'official'),
+  ('apple.com', 'official'), ('icloud.com', 'official'),
+  ('microsoft.com', 'official'), ('office.com', 'official'),
+  ('live.com', 'official'), ('outlook.com', 'official'),
+  ('bing.com', 'official'), ('xbox.com', 'official'),
+  ('meta.com', 'official'), ('facebook.com', 'official'),
+  ('instagram.com', 'official'), ('whatsapp.com', 'official'),
+  ('x.com', 'official'), ('twitter.com', 'official'),
+  ('linkedin.com', 'official'), ('tiktok.com', 'official'),
+  ('snapchat.com', 'official'), ('pinterest.com', 'official'),
+  ('reddit.com', 'official'), ('discord.com', 'official'),
+  ('telegram.org', 'official'), ('signal.org', 'official'),
+  ('amazon.com', 'official'), ('aws.amazon.com', 'official'),
+  ('netflix.com', 'official'), ('spotify.com', 'official'),
+  ('github.com', 'official'), ('gitlab.com', 'official'),
+  ('bitbucket.org', 'official'), ('stackoverflow.com', 'official'),
+  ('cloudflare.com', 'official'), ('oracle.com', 'official'),
+  ('adobe.com', 'official'), ('dropbox.com', 'official'),
+  ('zoom.us', 'official'), ('slack.com', 'official'),
+  ('notion.so', 'official'), ('figma.com', 'official'),
+  ('canva.com', 'official'), ('openai.com', 'official'),
+  ('anthropic.com', 'official'), ('claude.ai', 'official'),
+  ('npmjs.com', 'official'), ('pypi.org', 'official'),
+  ('docker.com', 'official'), ('hub.docker.com', 'official'),
+  -- Banks / payments
+  ('paypal.com', 'official'), ('venmo.com', 'official'),
+  ('stripe.com', 'official'), ('square.com', 'official'),
+  ('wise.com', 'official'), ('revolut.com', 'official'),
+  ('chase.com', 'official'), ('bankofamerica.com', 'official'),
+  ('wellsfargo.com', 'official'), ('citi.com', 'official'),
+  ('hsbc.com', 'official'), ('barclays.co.uk', 'official'),
+  ('maybank.com.my', 'official'), ('cimb.com.my', 'official'),
+  ('publicbank.com.my', 'official'), ('rhbgroup.com', 'official'),
+  ('ambank.com.my', 'official'), ('hongleongbank.com.my', 'official'),
+  ('bankislam.com.my', 'official'), ('bsn.com.my', 'official'),
+  -- Crypto
+  ('coinbase.com', 'official'), ('binance.com', 'official'),
+  ('kraken.com', 'official'), ('ledger.com', 'official'),
+  ('trezor.io', 'official'), ('metamask.io', 'official'),
+  -- E-commerce
+  ('shopee.com.my', 'official'), ('lazada.com.my', 'official'),
+  ('shopify.com', 'official'), ('ebay.com', 'official'),
+  ('aliexpress.com', 'official'), ('taobao.com', 'official'),
+  ('etsy.com', 'official'), ('walmart.com', 'official'),
+  ('target.com', 'official'), ('bestbuy.com', 'official'),
+  -- Delivery / mobility
+  ('grab.com', 'official'), ('uber.com', 'official'),
+  ('lyft.com', 'official'), ('doordash.com', 'official'),
+  ('foodpanda.com', 'official'),
+  -- Travel / maps
+  ('booking.com', 'official'), ('airbnb.com', 'official'),
+  ('expedia.com', 'official'), ('tripadvisor.com', 'official'),
+  ('agoda.com', 'official'), ('hotels.com', 'official'),
+  -- Government / essential
+  ('gov.uk', 'official'), ('gov.my', 'official'),
+  ('irs.gov', 'official'), ('usps.com', 'official'),
+  ('ato.gov.au', 'official'), ('hmrc.gov.uk', 'official'),
+  -- Infra / CDN (clients often fetch these)
+  ('cloudfront.net', 'official'), ('akamai.net', 'official'),
+  ('fastly.net', 'official'), ('jsdelivr.net', 'official'),
+  ('unpkg.com', 'official'), ('cdn.jsdelivr.net', 'official'),
+  ('gstatic.com', 'official'), ('googleapis.com', 'official'),
+  ('doubleclick.net', 'official'), ('google-analytics.com', 'official'),
+  ('fonts.googleapis.com', 'official'), ('bootstrapcdn.com', 'official'),
+  -- OS / update endpoints
+  ('windowsupdate.com', 'official'), ('mozilla.org', 'official'),
+  ('ubuntu.com', 'official'), ('debian.org', 'official'),
+  ('archlinux.org', 'official'), ('redhat.com', 'official')
+ON CONFLICT (domain) DO NOTHING;
+
+-- Brand anchors for typosquat detection. Pairs brand display name with its
+-- canonical domain. Resolver compares unknown domains against this list.
+INSERT INTO brand_domains (domain, brand, category) VALUES
+  ('google.com',        'Google',    'tech'),
+  ('youtube.com',       'YouTube',   'tech'),
+  ('gmail.com',         'Gmail',     'tech'),
+  ('apple.com',         'Apple',     'tech'),
+  ('icloud.com',        'iCloud',    'tech'),
+  ('microsoft.com',     'Microsoft', 'tech'),
+  ('outlook.com',       'Outlook',   'tech'),
+  ('facebook.com',      'Facebook',  'social'),
+  ('instagram.com',     'Instagram', 'social'),
+  ('whatsapp.com',      'WhatsApp',  'social'),
+  ('tiktok.com',        'TikTok',    'social'),
+  ('linkedin.com',      'LinkedIn',  'social'),
+  ('twitter.com',       'Twitter',   'social'),
+  ('x.com',             'X',         'social'),
+  ('amazon.com',        'Amazon',    'retail'),
+  ('netflix.com',       'Netflix',   'tech'),
+  ('spotify.com',       'Spotify',   'tech'),
+  ('paypal.com',        'PayPal',    'bank'),
+  ('venmo.com',         'Venmo',     'bank'),
+  ('stripe.com',        'Stripe',    'bank'),
+  ('chase.com',         'Chase',     'bank'),
+  ('bankofamerica.com', 'Bank of America', 'bank'),
+  ('wellsfargo.com',    'Wells Fargo', 'bank'),
+  ('maybank.com.my',    'Maybank',   'bank'),
+  ('cimb.com.my',       'CIMB',      'bank'),
+  ('publicbank.com.my', 'Public Bank', 'bank'),
+  ('rhbgroup.com',      'RHB',       'bank'),
+  ('hongleongbank.com.my', 'Hong Leong Bank', 'bank'),
+  ('coinbase.com',      'Coinbase',  'crypto'),
+  ('binance.com',       'Binance',   'crypto'),
+  ('metamask.io',       'MetaMask',  'crypto'),
+  ('ledger.com',        'Ledger',    'crypto'),
+  ('shopee.com.my',     'Shopee',    'retail'),
+  ('lazada.com.my',     'Lazada',    'retail'),
+  ('grab.com',          'Grab',      'mobility'),
+  ('uber.com',          'Uber',      'mobility'),
+  ('airbnb.com',        'Airbnb',    'travel'),
+  ('booking.com',       'Booking',   'travel'),
+  ('github.com',        'GitHub',    'tech'),
+  ('discord.com',       'Discord',   'social'),
+  ('reddit.com',        'Reddit',    'social'),
+  ('dropbox.com',       'Dropbox',   'tech'),
+  ('slack.com',         'Slack',     'tech'),
+  ('zoom.us',           'Zoom',      'tech'),
+  ('adobe.com',         'Adobe',     'tech'),
+  ('openai.com',        'OpenAI',    'tech'),
+  ('claude.ai',         'Claude',    'tech'),
+  ('anthropic.com',     'Anthropic', 'tech')
+ON CONFLICT (domain) DO NOTHING;

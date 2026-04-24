@@ -1,4 +1,15 @@
-"""Core resolution logic: cache → blocklist → forward → maybe-scan."""
+"""Core resolution logic.
+
+Pipeline (ordered by cost):
+  1. Bypass suffixes (.arpa / .local / .localhost) → forward upstream.
+  2. Whitelist (exact or parent match) → forward upstream, skip scan.
+  3. Blacklist (exact or parent match) → sinkhole to BLOCK_PAGE_IP.
+  4. Redis verdict cache (scan or prior verdict) → honour it.
+  5. Typosquat detector against brand anchors → sinkhole with brand mimic.
+  6. Truly unknown → forward + enqueue AI scan.
+
+Hot path never blocks on DB; all logging fire-and-forget.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -8,15 +19,15 @@ from typing import Optional
 import structlog
 from dnslib import DNSRecord, RR, QTYPE, A, AAAA, RCODE
 
-from .cache import Verdict, VerdictCache, VERDICT_SCAM, VERDICT_SUSPICIOUS
+from .cache import Verdict, VerdictCache, VERDICT_SCAM
 from .config import Config
 from .db import Database
+from .typosquat import TyposquatDetector, TyposquatHit
 from .upstream import UpstreamResolver
 
 log = structlog.get_logger()
 
 
-# Never scan or block these. Short-circuit to upstream.
 BYPASS_SUFFIXES = (
     "in-addr.arpa", "ip6.arpa", "local", "localhost", "arpa",
 )
@@ -38,13 +49,16 @@ class Resolver:
         db: Database,
         upstream: UpstreamResolver,
         blocklist: set[str],
+        whitelist: set[str],
+        typosquat: TyposquatDetector,
     ):
         self._cfg = config
         self._cache = cache
         self._db = db
         self._upstream = upstream
-        # Local blocklist seed — instant match, no Redis roundtrip.
         self._blocklist = blocklist
+        self._whitelist = whitelist
+        self._typosquat = typosquat
 
     async def resolve(self, wire: bytes, client_ip: Optional[str]) -> ResolveResult:
         try:
@@ -59,28 +73,59 @@ class Resolver:
         if not qname or _is_bypass(qname):
             return await self._forward(request, wire, qname)
 
-        verdict = await self._lookup(qname)
+        # 1) Whitelist → forward, no scan.
+        if self._match_chain(qname, self._whitelist):
+            return await self._forward(request, wire, qname)
 
-        if verdict and verdict.is_blocking:
+        # 2) Blacklist (static seed + confirmed reports + AI 'scam' verdicts).
+        if self._match_chain(qname, self._blocklist):
+            verdict = Verdict(
+                verdict=VERDICT_SCAM, reason="blocklist", source="blocklist",
+            )
             return self._block(request, qname, qtype, verdict, client_ip)
 
-        # Forward upstream first — user experience beats scanning latency.
+        # 3) Redis cache hit (scanner verdict or short-lived pending marker).
+        cached = await self._cache_lookup(qname)
+        if cached and cached.is_blocking:
+            return self._block(request, qname, qtype, cached, client_ip)
+        if cached and cached.verdict == "safe":
+            return await self._forward(request, wire, qname)
+
+        # 4) Typosquat — cheap, deterministic, no AI call.
+        hit = self._typosquat.check(qname)
+        if hit is not None:
+            verdict = Verdict(
+                verdict=VERDICT_SCAM,
+                reason=hit.reason,
+                source="typosquat",
+                confidence=85 if hit.distance == 0 else 70,
+                risk_score=90 if hit.distance == 0 else 75,
+            )
+            # Cache the verdict so future queries skip the check entirely.
+            asyncio.create_task(
+                self._cache.set(qname, verdict, ttl=self._cfg.scam_ttl)
+            )
+            return self._block_with_brand(request, qname, qtype, verdict, hit, client_ip)
+
+        # 5) Forward first — no delay to user — then trigger scan.
         result = await self._forward(request, wire, qname)
-
-        # If we have no verdict at all, schedule an async scan.
-        if verdict is None and _looks_scannable(qname, qtype):
+        if cached is None and _looks_scannable(qname, qtype):
             asyncio.create_task(self._enqueue_if_new(qname))
-
         return result
 
-    async def _lookup(self, domain: str) -> Optional[Verdict]:
-        # Walk parent chain: foo.bar.baz.com → bar.baz.com → baz.com.
+    # ---- helpers -----------------------------------------------------------
+
+    def _match_chain(self, domain: str, s: set[str]) -> bool:
         for candidate in _parent_chain(domain):
-            if candidate in self._blocklist:
-                return Verdict(verdict=VERDICT_SCAM, reason="static blocklist", source="blocklist")
-            cached = await self._cache.get(candidate)
-            if cached is not None:
-                return cached
+            if candidate in s:
+                return True
+        return False
+
+    async def _cache_lookup(self, domain: str) -> Optional[Verdict]:
+        for candidate in _parent_chain(domain):
+            v = await self._cache.get(candidate)
+            if v is not None:
+                return v
         return None
 
     def _block(
@@ -98,11 +143,8 @@ class Resolver:
                 rdata=A(self._cfg.block_ip), ttl=self._cfg.block_ttl,
             ))
         elif qtype == "AAAA":
-            # No IPv6 sinkhole — answer empty (NOERROR, 0 answers) so clients
-            # fall back to the A record (the block page).
             pass
         else:
-            # For TXT/MX/etc. respond NXDOMAIN so the query clearly fails.
             reply.header.rcode = RCODE.NXDOMAIN
 
         asyncio.create_task(self._db.log_block(
@@ -119,6 +161,46 @@ class Resolver:
             wire=reply.pack(), blocked=True, domain=domain, verdict=verdict,
         )
 
+    def _block_with_brand(
+        self,
+        request: DNSRecord,
+        domain: str,
+        qtype: str,
+        verdict: Verdict,
+        hit: TyposquatHit,
+        client_ip: Optional[str],
+    ) -> ResolveResult:
+        reply = request.reply()
+        if qtype == "A":
+            reply.add_answer(RR(
+                request.q.qname, QTYPE.A,
+                rdata=A(self._cfg.block_ip), ttl=self._cfg.block_ttl,
+            ))
+        elif qtype == "AAAA":
+            pass
+        else:
+            reply.header.rcode = RCODE.NXDOMAIN
+
+        asyncio.create_task(self._db.log_block(
+            domain=domain,
+            reason=verdict.reason,
+            verdict=verdict.verdict,
+            risk_score=verdict.risk_score,
+            confidence=verdict.confidence,
+            mimics_brand=hit.brand,
+            client_ip=client_ip,
+        ))
+        log.info(
+            "blocked_typosquat",
+            domain=domain,
+            mimics=hit.brand,
+            official=hit.brand_domain,
+            distance=hit.distance,
+        )
+        return ResolveResult(
+            wire=reply.pack(), blocked=True, domain=domain, verdict=verdict,
+        )
+
     async def _forward(
         self, request: DNSRecord, wire: bytes, domain: str,
     ) -> ResolveResult:
@@ -130,8 +212,6 @@ class Resolver:
         return ResolveResult(wire=answer, blocked=False, domain=domain, verdict=None)
 
     async def _enqueue_if_new(self, domain: str) -> None:
-        # Mark pending so repeated queries don't re-enqueue. Rate-limit on top
-        # of that so a single popular unknown domain can't hammer the scanner.
         if not await self._cache.rate_limit_ok(domain):
             return
         claimed = await self._cache.mark_pending(domain, ttl=self._cfg.unknown_ttl)
@@ -145,17 +225,13 @@ def _is_bypass(domain: str) -> bool:
 
 
 def _looks_scannable(domain: str, qtype: str) -> bool:
-    # Only trigger scans for the typical web lookup types.
     if qtype not in ("A", "AAAA", "HTTPS"):
         return False
-    # Ignore single-label names (e.g. "wpad") — they're never real scam sites.
     return "." in domain
 
 
 def _parent_chain(domain: str):
-    """Yield domain, then each parent, stopping before the TLD."""
     parts = domain.split(".")
-    # Stop at 2 labels (e.g. "example.com") — no point matching "com".
     for i in range(len(parts) - 1):
         yield ".".join(parts[i:])
 
@@ -170,5 +246,4 @@ def _servfail(wire: bytes) -> bytes:
         return b""
 
 
-# Suppress unused-import lint for AAAA (kept for future IPv6 sinkhole).
 _ = AAAA

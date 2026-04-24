@@ -2,6 +2,8 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { apiGet, type CheckResult } from "@/lib/api";
 
+type Stats = { total_blocked: number };
+
 async function lookup(domain: string): Promise<CheckResult | null> {
   try {
     return await apiGet<CheckResult>(`/check/${encodeURIComponent(domain)}`);
@@ -10,52 +12,156 @@ async function lookup(domain: string): Promise<CheckResult | null> {
   }
 }
 
+async function getStats(): Promise<Stats | null> {
+  try {
+    return await apiGet<Stats>("/stats");
+  } catch {
+    return null;
+  }
+}
+
 export default async function BlockPage() {
   const h = await headers();
   const host = (h.get("x-original-host") || h.get("host") || "").split(":")[0];
-  const result = host ? await lookup(host) : null;
+  const [result, stats] = await Promise.all([
+    host ? lookup(host) : Promise.resolve(null),
+    getStats(),
+  ]);
+
+  const reason = result?.reason ?? "Known scam or phishing domain on our blocklist.";
+  const brand = result?.mimics_brand ?? null;
+  const risk = result?.risk_score ?? null;
+  const source = result?.source ?? null;
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-16">
-      <div className="rounded-3xl border-2 border-brand bg-red-950/30 p-10 text-center">
-        <div className="text-6xl">🚫</div>
-        <h1 className="mt-4 text-3xl font-bold">ScamLens blocked this site</h1>
-        <p className="mt-2 text-lg text-zinc-300">
-          <span className="font-mono text-white">{host || "(unknown)"}</span>
-        </p>
-
-        <div className="mt-8 rounded-xl bg-black/30 p-5 text-left">
-          <div className="text-xs uppercase tracking-wider text-zinc-400">Why we blocked this</div>
-          <p className="mt-2 text-zinc-100">
-            {result?.reason ?? "Known scam or phishing domain on our blocklist."}
-          </p>
-          {result?.mimics_brand && (
-            <p className="mt-2 text-sm text-zinc-300">
-              Appears to impersonate: <strong>{result.mimics_brand}</strong>
+    <main className="mx-auto max-w-2xl px-6 py-10">
+      <div className="rounded-3xl border border-red-500/40 bg-gradient-to-b from-red-950/40 to-zinc-950 p-8 shadow-2xl">
+        <div className="flex items-start gap-4">
+          <ShieldIcon />
+          <div className="flex-1">
+            <div className="text-xs font-semibold uppercase tracking-widest text-red-400">
+              Access blocked
+            </div>
+            <h1 className="mt-1 text-2xl font-bold leading-tight">
+              This page is dangerous
+            </h1>
+            <p className="mt-1 break-all font-mono text-sm text-zinc-400">
+              {host || "(unknown)"}
             </p>
-          )}
-          {typeof result?.risk_score === "number" && (
-            <p className="mt-2 text-sm text-zinc-400">
-              Risk score: {result.risk_score}/100 · confidence {result.confidence ?? "—"}%
-            </p>
-          )}
+          </div>
         </div>
 
-        <div className="mt-8 flex flex-wrap justify-center gap-3">
+        <div className="mt-6 rounded-2xl border border-zinc-800 bg-black/40 p-5">
+          <div className="text-xs uppercase tracking-wider text-zinc-500">
+            Why we blocked it
+          </div>
+          <p className="mt-2 text-zinc-100">{reason}</p>
+
+          {brand && (
+            <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-950/20 p-3 text-sm">
+              <div className="font-semibold text-amber-200">
+                Impersonating {brand}
+              </div>
+              <div className="mt-0.5 text-amber-200/80">
+                This domain looks like {brand} but is not owned by them.
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-zinc-400">
+            {risk !== null && (
+              <div>
+                <span className="text-zinc-500">Risk score</span>{" "}
+                <span className="font-semibold text-zinc-200">{risk}/100</span>
+              </div>
+            )}
+            {source && (
+              <div>
+                <span className="text-zinc-500">Source</span>{" "}
+                <span className="font-semibold text-zinc-200">
+                  {labelSource(source)}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
           <Link
-            href="https://www.google.com"
-            className="rounded-xl bg-brand px-6 py-3 font-semibold hover:bg-brand-dark"
+            href="https://duckduckgo.com"
+            className="flex items-center justify-center rounded-xl bg-brand px-5 py-3 font-semibold text-white hover:bg-brand-dark"
           >
-            Go back to safety
+            ← Take me back to safety
           </Link>
           <Link
             href={`/report?domain=${encodeURIComponent(host || "")}`}
-            className="rounded-xl border border-zinc-600 px-6 py-3 font-semibold text-zinc-200 hover:border-zinc-400"
+            className="flex items-center justify-center rounded-xl border border-zinc-700 px-5 py-3 font-semibold text-zinc-200 hover:border-zinc-500"
           >
             Report false positive
           </Link>
         </div>
       </div>
+
+      {stats && (
+        <p className="mt-6 text-center text-sm text-zinc-500">
+          ScamLens has blocked{" "}
+          <span className="font-semibold text-zinc-300">
+            {stats.total_blocked.toLocaleString()}
+          </span>{" "}
+          scam attempts on this network.
+        </p>
+      )}
+
+      <div className="mt-10 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-5 text-sm text-zinc-300">
+        <div className="font-semibold">What to do next</div>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-zinc-400">
+          <li>Don&apos;t enter any passwords, OTP codes, or card details on this page.</li>
+          <li>If the link arrived in a message, delete the message.</li>
+          <li>If you already entered credentials, change them now and enable 2FA.</li>
+          <li>
+            Is this a mistake? Hit{" "}
+            <span className="text-zinc-200">Report false positive</span> — we
+            review every submission.
+          </li>
+        </ul>
+      </div>
     </main>
   );
+}
+
+function ShieldIcon() {
+  return (
+    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-red-500/15 text-red-300 ring-1 ring-red-500/40">
+      <svg viewBox="0 0 24 24" fill="none" className="h-8 w-8" aria-hidden>
+        <path
+          d="M12 2 4 5v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V5l-8-3Z"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        <path
+          d="m9 12 2 2 4-4"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function labelSource(s: string): string {
+  switch (s) {
+    case "blocklist":
+      return "Known scam database";
+    case "typosquat":
+      return "Brand-impersonation detector";
+    case "ai":
+      return "AI analysis";
+    case "scan_error":
+      return "Pending verification";
+    default:
+      return s;
+  }
 }
