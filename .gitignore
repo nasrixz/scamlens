@@ -1,0 +1,16 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+node_modules/
+.next/
+out/
+dist/
+*.log
+postgres_data/
+redis_data/
+.DS_Store
+.idea/
+.vscode/
+*.mobileconfig
+!scripts/*.mobileconfig
