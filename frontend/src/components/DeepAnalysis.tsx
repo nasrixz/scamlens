@@ -35,26 +35,36 @@ type Envelope =
 export function DeepAnalysis({ domain }: { domain: string }) {
   const [state, setState] = useState<Envelope>({ status: "idle", domain });
   const [secs, setSecs] = useState(0);
+  const [running, setRunning] = useState(false);
 
+  // On mount, see if a deep result is already cached. Don't auto-trigger.
   useEffect(() => {
     let cancelled = false;
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let counterTimer: ReturnType<typeof setInterval> | null = null;
-
-    async function kickoff() {
+    (async () => {
       try {
-        const r = await fetch(`${API_BASE}/deep/${encodeURIComponent(domain)}`, {
-          method: "POST",
-        });
-        if (!r.ok) throw new Error(`POST ${r.status}`);
+        const r = await fetch(`${API_BASE}/deep/${encodeURIComponent(domain)}`);
+        if (cancelled) return;
         const j = (await r.json()) as Envelope;
-        if (!cancelled) setState(j);
-        if (!cancelled && j.status === "pending") schedule();
+        setState(j);
+        if (j.status === "pending") {
+          // Someone else already kicked it off; surface progress + poll.
+          setRunning(true);
+        }
       } catch {
-        // network / rate-limit — fall through to polling GET anyway
-        if (!cancelled) schedule();
+        // ignore — user can still click the button
       }
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [domain]);
+
+  // Poll while running.
+  useEffect(() => {
+    if (!running) return;
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    const counterTimer = setInterval(() => setSecs((s) => s + 1), 1000);
 
     async function poll() {
       try {
@@ -62,27 +72,67 @@ export function DeepAnalysis({ domain }: { domain: string }) {
         const j = (await r.json()) as Envelope;
         if (cancelled) return;
         setState(j);
-        if (j.status !== "done") schedule();
+        if (j.status === "done") {
+          setRunning(false);
+        } else {
+          pollTimer = setTimeout(poll, 4000);
+        }
       } catch {
-        if (!cancelled) schedule();
+        if (!cancelled) pollTimer = setTimeout(poll, 4000);
       }
     }
 
-    function schedule() {
-      pollTimer = setTimeout(poll, 4000);
-    }
-
-    counterTimer = setInterval(() => setSecs((s) => s + 1), 1000);
-    kickoff();
-
+    pollTimer = setTimeout(poll, 2000);
     return () => {
       cancelled = true;
       if (pollTimer) clearTimeout(pollTimer);
-      if (counterTimer) clearInterval(counterTimer);
+      clearInterval(counterTimer);
     };
-  }, [domain]);
+  }, [running, domain]);
 
-  if (state.status !== "done") {
+  async function start() {
+    setSecs(0);
+    setRunning(true);
+    try {
+      const r = await fetch(`${API_BASE}/deep/${encodeURIComponent(domain)}`, {
+        method: "POST",
+      });
+      const j = (await r.json()) as Envelope;
+      setState(j);
+      if (j.status === "done") setRunning(false);
+    } catch {
+      // Polling will pick it up if the trigger raced through.
+    }
+  }
+
+  // Idle state — show the explicit start button.
+  if (state.status === "idle" && !running) {
+    return (
+      <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-zinc-500">
+              Deep web analysis
+            </div>
+            <div className="mt-1 font-semibold text-zinc-200">
+              Run a full sandboxed page load + AI scan
+            </div>
+            <div className="mt-1 text-xs text-zinc-500">
+              Captures HTML, screenshot, and outbound links. Takes 20–60 seconds.
+            </div>
+          </div>
+          <button
+            onClick={start}
+            className="rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
+          >
+            Run deep analysis
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (running || state.status !== "done") {
     return (
       <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 text-sm">
         <div className="flex items-center justify-between">

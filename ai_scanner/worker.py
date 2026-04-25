@@ -17,7 +17,12 @@ import structlog
 from .ai import AIClient, ScanVerdict
 from .config import Config
 from .fetcher import PageFetcher
-from .heuristics import analyze, render_for_prompt, severity_floor
+from .heuristics import (
+    analyze,
+    classify_empty_page,
+    render_for_prompt,
+    severity_floor,
+)
 from .rdap import AGE_AUTO_SAFE_DAYS, lookup_age
 from .store import VerdictStore
 
@@ -93,6 +98,14 @@ class Worker:
                         domain, "fetch failed", self._cfg.unknown_ttl,
                     )
                     log.info("scan_fetch_failed", domain=domain)
+                    return
+
+                empty = classify_empty_page(capture.html, capture.status or 0)
+                if empty:
+                    log.info("scan_skip_empty", domain=domain, reason=empty)
+                    await self._store.save_error(
+                        domain, f"empty page: {empty}", self._cfg.unknown_ttl,
+                    )
                     return
 
                 heuristics = analyze(capture.html, domain)

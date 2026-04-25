@@ -1,4 +1,4 @@
-"""Post-AI heuristic safety net.
+"""Post-AI heuristic safety net + pre-AI empty-page classifier.
 
 When the AI returns 'safe' on content that has unmistakable phishing
 fingerprints (password input + sensitive form fields, brand keywords on a
@@ -6,11 +6,16 @@ domain that doesn't own them, obfuscated scripts), force the verdict up
 to 'suspicious' or 'scam'. Also feed the same hints back into the AI
 prompt as a CONCRETE_TOKENS section so the model can't credibly miss
 them.
+
+The empty-page classifier short-circuits the AI when there's nothing
+substantive to analyze (404, blank shell, parking page, framework
+boilerplate without real content).
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html import unescape
 
 
 @dataclass
@@ -197,3 +202,55 @@ def severity_floor(report: HeuristicReport, domain: str) -> tuple[str, list[str]
         return ("suspicious", reasons)
 
     return ("safe", reasons)
+
+
+# ----- empty-page classifier -----------------------------------------------
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(script|style|noscript)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL,
+)
+
+
+def _visible_text(html: str) -> str:
+    """Cheap text extraction for emptiness detection — strip script/style,
+    strip tags, normalize whitespace."""
+    no_script = _SCRIPT_STYLE_RE.sub(" ", html)
+    text = _TAG_RE.sub(" ", no_script)
+    text = unescape(text)
+    return _WS_RE.sub(" ", text).strip()
+
+
+# A typical SPA shell renders <100 chars of visible text before JS hydrates;
+# we ran wait_for("networkidle") in the fetcher so the page should be settled
+# by now. Cap is intentionally aggressive to skip framework-shell-only pages.
+_EMPTY_TEXT_THRESHOLD = 80
+_PARKING_KEYWORDS = (
+    "domain is for sale",
+    "buy this domain",
+    "this domain is parked",
+    "default web page",
+    "404 not found",
+    "site temporarily unavailable",
+    "page not found",
+    "this page isn't working",
+    "sorry, the page you requested could not be found",
+)
+
+
+def classify_empty_page(html: str, status: int = 0) -> str | None:
+    """Return a human-readable reason if the page has no scannable content,
+    otherwise None. Status 0 means 'unknown / treat as 200'."""
+    if status >= 400:
+        return f"Server returned HTTP {status}"
+    text = _visible_text(html)
+    if len(html) < 200:
+        return "Page returned no HTML body"
+    if len(text) < _EMPTY_TEXT_THRESHOLD:
+        return "Page is empty (no visible text)"
+    if len(text) < 600:
+        lowered = text.lower()
+        if any(k in lowered for k in _PARKING_KEYWORDS):
+            return "Domain parking / placeholder page"
+    return None

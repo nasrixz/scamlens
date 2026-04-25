@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import base64
 import re
-from html import unescape
 from urllib.parse import urlparse
 
 import structlog
@@ -24,7 +23,12 @@ from aiohttp import web
 from .ai import AIClient, ScanVerdict
 from .config import Config
 from .fetcher import PageFetcher
-from .heuristics import analyze, render_for_prompt, severity_floor
+from .heuristics import (
+    analyze,
+    classify_empty_page,
+    render_for_prompt,
+    severity_floor,
+)
 from .rdap import lookup_age
 from .store import VerdictStore
 
@@ -67,7 +71,7 @@ def build_app(
         # Empty / error / parking-style page → skip AI entirely. Saves a call
         # on dead domains, gives the user a clear signal instead of an AI
         # making up reasons from nothing.
-        empty = _classify_empty_page(capture)
+        empty = classify_empty_page(capture.html, capture.status or 0)
         if empty is not None:
             await store.save_error(domain, empty, cfg.unknown_ttl)
             return web.json_response({
@@ -150,52 +154,6 @@ def _apply_floor(verdict: ScanVerdict, heuristics, domain: str) -> ScanVerdict:
         mimics_brand=verdict.mimics_brand,
         model=verdict.model,
     )
-
-
-_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def _visible_text(html: str) -> str:
-    """Quick + cheap text extraction. Strips tags, normalizes whitespace.
-    Doesn't need to be perfect — used only to detect 'page is empty'."""
-    no_script = re.sub(
-        r"<(script|style|noscript)[^>]*>.*?</\1>", " ", html,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    text = _TAG_RE.sub(" ", no_script)
-    text = unescape(text)
-    text = _WHITESPACE_RE.sub(" ", text).strip()
-    return text
-
-
-def _classify_empty_page(capture) -> str | None:
-    """Return a human-readable reason if the page has no scannable content,
-    otherwise None."""
-    status = capture.status or 0
-    if status >= 400:
-        return f"Server returned HTTP {status}"
-    text = _visible_text(capture.html)
-    # Fewer than this many visible chars means there's nothing for the AI
-    # to read — likely a blank holding page, a JS shell that didn't render,
-    # or a parking page redirected away.
-    if len(text) < 60:
-        return "Page is empty (no visible text)"
-    if len(capture.html) < 200:
-        return "Page returned no HTML body"
-    # Common parking-domain keywords (very loose check, on tiny pages).
-    if len(text) < 400:
-        lowered = text.lower()
-        if any(k in lowered for k in (
-            "domain is for sale",
-            "buy this domain",
-            "this domain is parked",
-            "default web page",
-            "404 not found",
-            "site temporarily unavailable",
-        )):
-            return "Domain parking / placeholder page"
-    return None
 
 
 def _extract_domain(url_or_domain: str) -> str:
