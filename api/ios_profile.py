@@ -31,6 +31,7 @@ class ProfileSpec:
     dns_hostname: str                   # DoH/DoT server hostname
     protocol: Protocol = "HTTPS"
     doh_path: str = "/dns-query"        # appended to https://<host> for DoH
+    doh_token: str = ""                 # optional token for per-user DoH
     server_addresses: list[str] = field(default_factory=list)  # IPv4/IPv6 fallback (DoT)
     prohibited_domains: list[str] = field(default_factory=list)  # bypass list (captive portals, local TLDs)
     allow_removal: bool = True
@@ -50,7 +51,8 @@ def build_profile(spec: ProfileSpec) -> bytes:
 
     dns_settings: dict = {"DNSProtocol": spec.protocol}
     if spec.protocol == "HTTPS":
-        dns_settings["ServerURL"] = f"https://{spec.dns_hostname}{spec.doh_path}"
+        token_suffix = f"/{spec.doh_token}" if spec.doh_token else ""
+        dns_settings["ServerURL"] = f"https://{spec.dns_hostname}{spec.doh_path}{token_suffix}"
     else:  # TLS
         dns_settings["ServerName"] = spec.dns_hostname
     if spec.server_addresses:
@@ -108,9 +110,9 @@ def sign_profile(unsigned: bytes, cert_pem: Path, key_pem: Path) -> bytes:
         return signed_path.read_bytes()
 
 
-def build_mobileconfig(dns_hostname: str, org: str, identifier: str) -> bytes:
+def build_mobileconfig(dns_hostname: str, org: str, identifier: str, doh_token: str | None = None) -> bytes:
     """Backwards-compatible wrapper used by the API for the common DoH case."""
-    spec = ProfileSpec(org=org, identifier=identifier, dns_hostname=dns_hostname)
+    spec = ProfileSpec(org=org, identifier=identifier, dns_hostname=dns_hostname, doh_token=doh_token or "")
     return build_profile(spec)
 
 
@@ -124,8 +126,9 @@ def _describe(spec: ProfileSpec) -> str:
 
 def _uuids(spec: ProfileSpec) -> tuple[str, str]:
     ns = uuid.uuid5(uuid.NAMESPACE_DNS, spec.uuid_namespace or spec.identifier)
-    profile_uuid = uuid.uuid5(ns, f"profile:{spec.dns_hostname}:{spec.protocol}").hex.upper()
-    payload_uuid = uuid.uuid5(ns, f"payload:{spec.dns_hostname}:{spec.protocol}").hex.upper()
+    token_part = f":{spec.doh_token}" if spec.doh_token else ""
+    profile_uuid = uuid.uuid5(ns, f"profile:{spec.dns_hostname}:{spec.protocol}{token_part}").hex.upper()
+    payload_uuid = uuid.uuid5(ns, f"payload:{spec.dns_hostname}:{spec.protocol}{token_part}").hex.upper()
     return profile_uuid, payload_uuid
 
 

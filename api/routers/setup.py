@@ -1,7 +1,7 @@
 """/api/setup/* — per-platform instructions + iOS profile download."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 
 from ..deps import get_cfg
 from ..ios_profile import build_mobileconfig
@@ -11,9 +11,12 @@ router = APIRouter()
 
 
 @router.get("/setup/ios")
-async def setup_ios(cfg=Depends(get_cfg)) -> Response:
+async def setup_ios(
+    cfg=Depends(get_cfg),
+    token: str | None = Query(None, description="Optional DoH token for per-user DNS"),
+) -> Response:
     """Download Apple Configuration Profile (.mobileconfig)."""
-    body = build_mobileconfig(cfg.dns_hostname, cfg.profile_org, cfg.profile_identifier)
+    body = build_mobileconfig(cfg.dns_hostname, cfg.profile_org, cfg.profile_identifier, doh_token=token)
     filename = f"{cfg.profile_org.lower()}-dns.mobileconfig"
     return Response(
         content=body,

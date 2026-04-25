@@ -153,6 +153,13 @@ export default function AccountPage() {
             Blocked domains will be linked to your account so your guardians
             can see them.
           </p>
+          <a
+            href={`/api/setup/ios?token=${me.doh_token}`}
+            download
+            className="mt-3 inline-block rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+          >
+            Download macOS/iOS Profile
+          </a>
         </section>
       )}
 
