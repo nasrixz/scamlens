@@ -12,7 +12,12 @@ export function UserMenu() {
   useEffect(() => {
     userApi
       .me()
-      .then((u) => setUser(u))
+      .then((u) => {
+        setUser(u);
+        if (u && "Notification" in window && Notification.permission === "default") {
+          Notification.requestPermission();
+        }
+      })
       .catch((e) => {
         if (!(e instanceof AuthError)) console.error(e);
       })
