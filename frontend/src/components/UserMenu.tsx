@@ -53,35 +53,42 @@ export function UserMenu() {
         <span className="hidden sm:inline">{user.email}</span>
       </button>
 
-      {menuOpen && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-          <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-zinc-700 bg-zinc-900 py-1 shadow-xl">
-            <Link
-              href="/account"
-              onClick={() => setMenuOpen(false)}
-              className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
-            >
-              Account
-            </Link>
-            {user.role === "admin" && (
-              <Link
-                href="/admin"
-                onClick={() => setMenuOpen(false)}
-                className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
-              >
-                Admin
-              </Link>
-            )}
-            <button
-              onClick={handleLogout}
-              className="block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-zinc-800"
-            >
-              Sign out
-            </button>
-          </div>
-        </>
-      )}
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-zinc-700 bg-zinc-900 py-1 shadow-xl">
+                <Link
+                  href="/dashboard"
+                  onClick={() => setMenuOpen(false)}
+                  className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                >
+                  Dashboard
+                </Link>
+                <Link
+                  href="/account"
+                  onClick={() => setMenuOpen(false)}
+                  className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                >
+                  Account
+                </Link>
+                {user.role === "admin" && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setMenuOpen(false)}
+                    className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                  >
+                    Admin
+                  </Link>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-zinc-800"
+                >
+                  Sign out
+                </button>
+              </div>
+            </>
+          )}
     </div>
   );
 }
