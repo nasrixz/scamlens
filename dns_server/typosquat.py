@@ -21,6 +21,10 @@ from typing import Iterable, Optional
 HOMOGLYPHS = {
     "0": "o", "1": "l", "3": "e", "4": "a", "5": "s",
     "$": "s", "@": "a", "!": "i",
+    # 'i' and 'l' are visually swapped constantly in phishing domains
+    # (uppercase I lowers to lowercase i which a typo-squatter uses to
+    # imitate lowercase l: paypaII.com → paypail → paypal).
+    "i": "l",
 }
 # multi-char replacements (apply before single-char)
 MULTI_HOMOGLYPHS = [
@@ -79,18 +83,25 @@ class TyposquatDetector:
         # brand, distance ≤ 2 only when the brand label is long enough that
         # two edits don't collapse into an unrelated word (guards against
         # 'snapple' → 'apple' false positives).
+        # Check BOTH the raw and the homoglyph-normalized form. Catches
+        # 'paypa11' (raw distance 2 to 'paypal' but normalized 'paypall'
+        # is distance 1).
+        candidates = {label}
+        if normalized != label:
+            candidates.add(normalized)
         for brand_label, (canonical, brand) in self._brand_labels.items():
             max_d = 2 if len(brand_label) >= 7 else 1
-            if abs(len(brand_label) - len(label)) > max_d:
-                continue
-            d = _levenshtein(label, brand_label, max_distance=max_d)
-            if d is not None and 0 < d <= max_d:
-                return TyposquatHit(
-                    brand=brand,
-                    brand_domain=canonical,
-                    reason=f"edit distance {d} from {canonical}",
-                    distance=d,
-                )
+            for candidate in candidates:
+                if abs(len(brand_label) - len(candidate)) > max_d:
+                    continue
+                d = _levenshtein(candidate, brand_label, max_distance=max_d)
+                if d is not None and 0 < d <= max_d:
+                    return TyposquatHit(
+                        brand=brand,
+                        brand_domain=canonical,
+                        reason=f"edit distance {d} from {canonical}",
+                        distance=d,
+                    )
 
         # 3) Brand label appears as a token inside a longer label — e.g.
         # 'secure-paypal-login' or 'paypal-account'. Requires the brand to
