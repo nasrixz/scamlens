@@ -34,7 +34,12 @@ async def run() -> None:
     cfg = Config.from_env()
     _setup_logging(cfg.log_level)
     log = structlog.get_logger()
-    log.info("scanner_boot", provider=cfg.ai_provider, model=cfg.anthropic_model)
+    active_model = {
+        "anthropic": cfg.anthropic_model,
+        "gemini": cfg.gemini_model,
+        "qwen": cfg.qwen_model,
+    }.get(cfg.ai_provider, "?")
+    log.info("scanner_boot", provider=cfg.ai_provider, model=active_model)
 
     redis = Redis.from_url(cfg.redis_url, decode_responses=True)
     pg_pool = await asyncpg.create_pool(

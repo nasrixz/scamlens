@@ -110,6 +110,59 @@ class AnthropicClient(AIClient):
         raise RuntimeError("unreachable")
 
 
+class QwenClient(AIClient):
+    """Alibaba Qwen via DashScope OpenAI-compatible endpoint.
+
+    Vision-capable models (e.g. qwen-vl-max, qwen-vl-plus) accept image +
+    text in a single multimodal message — same shape as OpenAI's vision API
+    so we use the official `openai` SDK with a custom base_url.
+    """
+
+    def __init__(self, api_key: str, model: str, base_url: str):
+        from openai import AsyncOpenAI  # lazy import
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._model = model
+
+    async def scan(self, domain: str, html: str, screenshot_png: bytes) -> ScanVerdict:
+        image_data_url = (
+            "data:image/png;base64,"
+            + base64.b64encode(screenshot_png).decode()
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Domain being analyzed: {domain}\n\n"
+                            f"HTML content (truncated):\n```html\n{html}\n```"
+                        ),
+                    },
+                ],
+            },
+        ]
+
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=1, max=8),
+            retry=retry_if_exception_type(Exception),
+            reraise=True,
+        ):
+            with attempt:
+                resp = await self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    max_tokens=600,
+                    temperature=0.0,
+                )
+                text = resp.choices[0].message.content or ""
+                return _parse_verdict(text, model=self._model)
+        raise RuntimeError("unreachable")
+
+
 class GeminiClient(AIClient):
     def __init__(self, api_key: str, model: str):
         from google import genai  # noqa: WPS433
@@ -191,4 +244,8 @@ def build_client(provider: str, cfg) -> AIClient:
         if not cfg.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY not set")
         return GeminiClient(cfg.gemini_api_key, cfg.gemini_model)
+    if provider == "qwen":
+        if not cfg.qwen_api_key:
+            raise RuntimeError("QWEN_API_KEY (or DASHSCOPE_API_KEY) not set")
+        return QwenClient(cfg.qwen_api_key, cfg.qwen_model, cfg.qwen_base_url)
     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")

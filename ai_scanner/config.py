@@ -19,6 +19,9 @@ class Config:
     anthropic_model: str
     gemini_api_key: str
     gemini_model: str
+    qwen_api_key: str
+    qwen_model: str
+    qwen_base_url: str
 
     max_html_chars: int
     screenshot_max_bytes: int
@@ -40,6 +43,12 @@ class Config:
             anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+            qwen_api_key=os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY", ""),
+            qwen_model=os.getenv("QWEN_MODEL", "qwen-vl-max"),
+            qwen_base_url=os.getenv(
+                "QWEN_BASE_URL",
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            ),
             max_html_chars=int(os.getenv("MAX_HTML_CHARS", "120000")),
             screenshot_max_bytes=int(os.getenv("SCREENSHOT_MAX_BYTES", "900000")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
