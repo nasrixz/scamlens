@@ -32,22 +32,31 @@ class ScrapeWorker:
         self._redis = redis
         self._client = client
 
-    async def run_window(self) -> RunStats:
-        """Run one scrape window — bounded by cfg.duration_minutes. Iterates
-        keywords round-robin and stops when budget exhausted."""
+    async def run_window(
+        self,
+        keywords: list[str] | None = None,
+        duration_minutes: int | None = None,
+        max_pages: int | None = None,
+    ) -> RunStats:
+        """Run one scrape window. Optional overrides let the admin /run
+        endpoint trigger a custom-scoped pass without touching the cron loop."""
+        kws = keywords if keywords is not None else self._cfg.keywords
+        budget_min = duration_minutes if duration_minutes is not None else self._cfg.duration_minutes
+        pages = max_pages if max_pages is not None else self._cfg.max_pages_per_keyword
+
         stats = RunStats()
-        deadline = time.time() + self._cfg.duration_minutes * 60
+        deadline = time.time() + budget_min * 60
         run_id = await self._start_run("threads")
 
         try:
-            for keyword in self._cfg.keywords:
+            for keyword in kws:
                 if time.time() >= deadline:
                     break
                 log.info("scrape_keyword_start", keyword=keyword)
                 try:
                     async for post in self._client.keyword_search(
                         keyword,
-                        max_pages=self._cfg.max_pages_per_keyword,
+                        max_pages=pages,
                         page_delay=self._cfg.request_delay_seconds,
                     ):
                         if time.time() >= deadline:

@@ -77,6 +77,28 @@ export const adminApi = {
     adminFetch(`/whitelist/${encodeURIComponent(domain)}`, { method: "DELETE" }),
   scan: (url: string) =>
     adminFetch<ScanReport>("/scan", { method: "POST", json: { url } }),
+  startScrape: (opts: {
+    keywords?: string[];
+    duration_minutes?: number;
+    max_pages?: number;
+  }) => adminFetch<{ status: string; message?: string }>("/scrape", {
+    method: "POST",
+    json: opts,
+  }),
+  scrapeStatus: () =>
+    adminFetch<{ running: boolean; runs: ScrapeRun[] }>("/scrape/status"),
+};
+
+export type ScrapeRun = {
+  id: number;
+  platform: string;
+  started_at: string;
+  finished_at: string | null;
+  posts_seen: number;
+  urls_seen: number;
+  domains_new: number;
+  domains_blocked: number;
+  errors: number;
 };
 
 export type ScanReport = {

@@ -15,9 +15,11 @@ import signal
 
 import asyncpg
 import structlog
+from aiohttp import web
 from redis.asyncio import Redis
 
 from .config import Config
+from .control import LOCK_KEY, LOCK_TTL, build_app as build_control_app
 from .threads_client import ThreadsClient
 from .worker import ScrapeWorker
 
@@ -61,6 +63,14 @@ async def run() -> None:
     client = ThreadsClient(cfg.threads_token, search_type=cfg.threads_search_type)
     worker = ScrapeWorker(cfg, pool, redis, client)
 
+    # Internal HTTP control endpoint for manual triggers.
+    control_app = build_control_app(cfg, worker, redis)
+    control_runner = web.AppRunner(control_app, access_log=None)
+    await control_runner.setup()
+    control_site = web.TCPSite(control_runner, host="0.0.0.0", port=8091)
+    await control_site.start()
+    log.info("scraper_control_listening", port=8091)
+
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -68,11 +78,18 @@ async def run() -> None:
 
     try:
         while not stop.is_set():
-            try:
-                await worker.run_window()
-            except Exception as exc:
-                log.exception("scrape_window_failed", error=str(exc))
-            # Sleep until next window.
+            # Acquire lock so a manual run can't collide with the cron loop.
+            claimed = await redis.set(LOCK_KEY, "cron", ex=LOCK_TTL, nx=True)
+            if claimed:
+                try:
+                    await worker.run_window()
+                except Exception as exc:
+                    log.exception("scrape_window_failed", error=str(exc))
+                finally:
+                    await redis.delete(LOCK_KEY)
+            else:
+                log.info("scrape_skipped", reason="manual run in progress")
+
             sleep_for = max(60, cfg.interval_hours * 3600 - cfg.duration_minutes * 60)
             log.info("scraper_idle", sleep_seconds=sleep_for)
             try:
@@ -80,6 +97,7 @@ async def run() -> None:
             except asyncio.TimeoutError:
                 pass
     finally:
+        await control_runner.cleanup()
         await pool.close()
         await redis.aclose()
 

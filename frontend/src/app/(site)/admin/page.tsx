@@ -8,9 +8,10 @@ import {
   type AdminReport,
   type DomainRow,
   type ScanReport,
+  type ScrapeRun,
 } from "@/lib/admin";
 
-type Tab = "reports" | "blocklist" | "whitelist" | "scan";
+type Tab = "reports" | "blocklist" | "whitelist" | "scan" | "scrape";
 
 export default function AdminHome() {
   const router = useRouter();
@@ -65,7 +66,7 @@ export default function AdminHome() {
       )}
 
       <nav className="mt-8 flex flex-wrap gap-2">
-        {(["reports", "blocklist", "whitelist", "scan"] as Tab[]).map((t) => (
+        {(["reports", "blocklist", "whitelist", "scan", "scrape"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -75,7 +76,7 @@ export default function AdminHome() {
                 : "border border-zinc-700 text-zinc-300 hover:border-zinc-500"
             }`}
           >
-            {t === "scan" ? "Test scan" : t[0].toUpperCase() + t.slice(1)}
+            {t === "scan" ? "Test scan" : t === "scrape" ? "Social scrape" : t[0].toUpperCase() + t.slice(1)}
           </button>
         ))}
       </nav>
@@ -85,6 +86,7 @@ export default function AdminHome() {
         {tab === "blocklist" && <DomainPanel kind="blocklist" onChange={() => reloadCounts(setCounts)} />}
         {tab === "whitelist" && <DomainPanel kind="whitelist" onChange={() => reloadCounts(setCounts)} />}
         {tab === "scan" && <ScanPanel />}
+        {tab === "scrape" && <ScrapePanel onChange={() => reloadCounts(setCounts)} />}
       </div>
     </main>
   );
@@ -537,6 +539,177 @@ function Field({ label, value, mono }: { label: string; value?: string; mono?: b
     <div className="flex gap-2">
       <dt className="w-28 shrink-0 text-zinc-500">{label}</dt>
       <dd className={mono ? "font-mono break-all" : "break-words"}>{value ?? "—"}</dd>
+    </div>
+  );
+}
+
+// -------------------------------- social scrape -----------------------------
+
+function ScrapePanel({ onChange }: { onChange: () => void }) {
+  const [keywords, setKeywords] = useState("");
+  const [duration, setDuration] = useState<number | "">("");
+  const [maxPages, setMaxPages] = useState<number | "">("");
+  const [running, setRunning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [runs, setRuns] = useState<ScrapeRun[]>([]);
+
+  async function load() {
+    try {
+      const r = await adminApi.scrapeStatus();
+      setRunning(r.running);
+      setRuns(r.runs);
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 6000);
+    return () => clearInterval(t);
+  }, []);
+
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const opts: {
+        keywords?: string[];
+        duration_minutes?: number;
+        max_pages?: number;
+      } = {};
+      if (keywords.trim()) {
+        opts.keywords = keywords.split(",").map((k) => k.trim()).filter(Boolean);
+      }
+      if (duration !== "") opts.duration_minutes = Number(duration);
+      if (maxPages !== "") opts.max_pages = Number(maxPages);
+      await adminApi.startScrape(opts);
+      setRunning(true);
+      onChange();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "scrape trigger failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
+        <div className="text-xs uppercase tracking-wider text-zinc-500">
+          Threads keyword scrape
+        </div>
+        <p className="mt-1 text-sm text-zinc-400">
+          Pulls posts from Threads matching your keywords, extracts URLs, runs
+          each unknown URL through the AI scanner, and adds confirmed scams to
+          the blocklist with the original post linked as the source.
+        </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <div className="md:col-span-3">
+            <label className="block text-xs text-zinc-400">
+              Keywords (comma-separated, optional — defaults to env list)
+            </label>
+            <input
+              value={keywords}
+              onChange={(e) => setKeywords(e.target.value)}
+              placeholder="penipuan, paypal locked, fake bank"
+              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-brand"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-400">
+              Duration minutes (optional)
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={180}
+              value={duration}
+              onChange={(e) => setDuration(e.target.value === "" ? "" : Number(e.target.value))}
+              placeholder="60"
+              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-brand"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-400">
+              Max pages / keyword (optional)
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={maxPages}
+              onChange={(e) => setMaxPages(e.target.value === "" ? "" : Number(e.target.value))}
+              placeholder="10"
+              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-brand"
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              disabled={busy || running}
+              onClick={run}
+              className="w-full rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
+            >
+              {running ? "Scrape running…" : busy ? "Starting…" : "Run scrape now"}
+            </button>
+          </div>
+        </div>
+        {err && <div className="mt-3 text-sm text-red-400">{err}</div>}
+      </div>
+
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+        <div className="text-xs uppercase tracking-wider text-zinc-500">
+          Recent runs
+        </div>
+        <table className="mt-3 w-full text-left text-sm">
+          <thead className="text-xs uppercase text-zinc-500">
+            <tr>
+              <th className="px-2 py-1">Started</th>
+              <th className="px-2 py-1">Duration</th>
+              <th className="px-2 py-1 text-right">Posts</th>
+              <th className="px-2 py-1 text-right">URLs</th>
+              <th className="px-2 py-1 text-right">New</th>
+              <th className="px-2 py-1 text-right">Blocked</th>
+              <th className="px-2 py-1 text-right">Errors</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-800">
+            {runs.map((r) => {
+              const start = new Date(r.started_at);
+              const end = r.finished_at ? new Date(r.finished_at) : null;
+              const dur = end ? Math.round((end.getTime() - start.getTime()) / 1000 / 60) : null;
+              return (
+                <tr key={r.id}>
+                  <td className="px-2 py-1 text-zinc-400">
+                    {start.toLocaleString()}
+                  </td>
+                  <td className="px-2 py-1 text-zinc-400">
+                    {dur != null ? `${dur} min` : "—"}
+                  </td>
+                  <td className="px-2 py-1 text-right tabular-nums">{r.posts_seen}</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{r.urls_seen}</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{r.domains_new}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-brand">
+                    {r.domains_blocked}
+                  </td>
+                  <td className="px-2 py-1 text-right tabular-nums text-zinc-500">
+                    {r.errors}
+                  </td>
+                </tr>
+              );
+            })}
+            {runs.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-2 py-6 text-center text-zinc-500">
+                  No scrape runs yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

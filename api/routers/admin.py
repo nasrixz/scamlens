@@ -362,6 +362,7 @@ class ScanRequest(BaseModel):
 
 
 SCANNER_URL = os.getenv("SCANNER_URL", "http://ai_scanner:8090")
+SCRAPER_URL = os.getenv("SCRAPER_URL", "http://social_scraper:8091")
 
 
 @router.post("/scan")
@@ -385,3 +386,65 @@ async def admin_scan(
         return resp.json()
     except httpx.RequestError as exc:
         raise HTTPException(502, f"scanner unreachable: {exc}")
+
+
+# ------------------------------- scraper -------------------------------------
+
+class ScrapeRequest(BaseModel):
+    keywords: Optional[list[str]] = None
+    duration_minutes: Optional[int] = None
+    max_pages: Optional[int] = None
+
+
+@router.post("/scrape")
+async def admin_scrape_run(
+    body: ScrapeRequest = Body(default=ScrapeRequest()),
+    _: AdminPrincipal = Depends(current_admin),
+):
+    """Trigger a one-off Threads scrape window. Returns immediately; the
+    scraper service runs in the background. Lock prevents concurrent runs."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            resp = await c.post(
+                f"{SCRAPER_URL}/run",
+                json={
+                    "keywords": body.keywords,
+                    "duration_minutes": body.duration_minutes,
+                    "max_pages": body.max_pages,
+                },
+            )
+        if resp.status_code == 409:
+            raise HTTPException(409, "A scrape is already running")
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, resp.text[:300])
+        return resp.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"scraper unreachable: {exc}")
+
+
+@router.get("/scrape/status")
+async def admin_scrape_status(
+    _: AdminPrincipal = Depends(current_admin),
+    pool=Depends(get_pool),
+):
+    """Returns running flag (from the scraper) + last 10 scrape_runs rows."""
+    running = False
+    try:
+        async with httpx.AsyncClient(timeout=4) as c:
+            r = await c.get(f"{SCRAPER_URL}/status")
+        if r.status_code == 200:
+            running = r.json().get("running", False)
+    except Exception:
+        pass
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, platform,
+                   to_char(started_at,  'YYYY-MM-DD"T"HH24:MI:SSOF') AS started_at,
+                   to_char(finished_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS finished_at,
+                   posts_seen, urls_seen, domains_new, domains_blocked, errors
+            FROM scrape_runs ORDER BY id DESC LIMIT 10
+            """
+        )
+    return {"running": running, "runs": [dict(r) for r in rows]}
