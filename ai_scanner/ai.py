@@ -124,18 +124,22 @@ class QwenClient(AIClient):
         self._model = model
 
     async def scan(self, domain: str, html: str, screenshot_png: bytes) -> ScanVerdict:
-        # Qwen-VL via DashScope OpenAI-compat rejects a separate `system` role
-        # alongside multimodal user content (returns "model input format
-        # error"). Inline the system prompt as a leading text part inside the
-        # single user message.
+        # Qwen-VL via DashScope OpenAI-compat:
+        #   - rejects a separate `system` role alongside multimodal content
+        #     (returns "model input format error")
+        #   - HTML beyond ~30k chars triggers the same generic 400.
+        # Inline the system prompt and trim HTML.
+        # Also detect actual image mime — fetcher falls back to JPEG when the
+        # PNG is too large, so hard-coding "image/png" can desync.
+        mime = _sniff_image_mime(screenshot_png)
         image_data_url = (
-            "data:image/png;base64,"
-            + base64.b64encode(screenshot_png).decode()
+            f"data:{mime};base64," + base64.b64encode(screenshot_png).decode()
         )
+        trimmed_html = html[:30000]
         prompt_text = (
             f"{SYSTEM_PROMPT}\n\n"
             f"Domain being analyzed: {domain}\n\n"
-            f"HTML content (truncated):\n```html\n{html}\n```"
+            f"HTML content (truncated):\n```html\n{trimmed_html}\n```"
         )
         messages = [
             {
@@ -226,6 +230,19 @@ def _parse_verdict(text: str, model: str) -> ScanVerdict:
         mimics_brand=data.get("mimics_brand") or None,
         model=model,
     )
+
+
+def _sniff_image_mime(data: bytes) -> str:
+    """Detect image format from magic bytes. Defaults to PNG."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n"):
+        return "image/png"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
 
 
 def _clamp(value) -> int:
