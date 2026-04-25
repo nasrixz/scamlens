@@ -53,6 +53,23 @@ class Database:
             # Table may not exist yet on older deployments.
             return []
 
+    async def promote_to_blocklist(self, domain: str, category: str) -> None:
+        """Insert into blocklist_seed if not already present. Fire-and-forget
+        from the DNS hot path."""
+        if not self._pool:
+            return
+        try:
+            await self._pool.execute(
+                """
+                INSERT INTO blocklist_seed (domain, category)
+                VALUES ($1, $2)
+                ON CONFLICT (domain) DO NOTHING
+                """,
+                domain, category,
+            )
+        except Exception as exc:
+            log.warning("promote_blocklist_failed", domain=domain, error=str(exc))
+
     async def load_brand_domains(self) -> list[tuple[str, str]]:
         """(domain, brand) rows for typosquat detection."""
         if not self._pool:

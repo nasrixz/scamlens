@@ -190,6 +190,11 @@ class Resolver:
             mimics_brand=hit.brand,
             client_ip=client_ip,
         ))
+        # Make typosquat hits visible in the admin Blocklist tab so the
+        # operator can audit + remove false positives. Fire-and-forget.
+        asyncio.create_task(
+            self._db.promote_to_blocklist(domain, f"typosquat-{hit.brand}")
+        )
         log.info(
             "blocked_typosquat",
             domain=domain,

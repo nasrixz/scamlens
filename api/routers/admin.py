@@ -220,9 +220,16 @@ async def list_blocklist(
     _: AdminPrincipal = Depends(current_admin),
     pool=Depends(get_pool),
 ):
+    """Returns blocklist_seed rows. Auto-populated by:
+      - manual seed (category = scam-* / typosquat-* / test)
+      - typosquat detector hits (category = typosquat-<brand>)
+      - confirmed user reports (category = user-report)
+      - AI scanner with high confidence (category = ai-confirmed)
+    """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT domain, category, added_at FROM blocklist_seed ORDER BY added_at DESC LIMIT $1",
+            "SELECT domain, category, added_at FROM blocklist_seed "
+            "ORDER BY added_at DESC LIMIT $1",
             limit,
         )
     return {"items": [dict(r) for r in rows]}

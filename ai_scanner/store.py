@@ -68,6 +68,26 @@ class VerdictStore:
         except Exception as exc:
             log.warning("verdict_pg_write_failed", domain=domain, error=str(exc))
 
+        # Promote confidently-scammy verdicts into blocklist_seed so they
+        # show up in the admin Blocklist tab and survive verdict-cache TTL.
+        # Operators can review + remove false positives there. Whitelist
+        # always wins (admin can override).
+        if verdict.verdict == "scam" and verdict.confidence >= 70:
+            try:
+                await self._pool.execute(
+                    """
+                    INSERT INTO blocklist_seed (domain, category)
+                    VALUES ($1, 'ai-confirmed')
+                    ON CONFLICT (domain) DO NOTHING
+                    """,
+                    domain,
+                )
+            except Exception as exc:
+                log.warning(
+                    "blocklist_seed_promote_failed",
+                    domain=domain, error=str(exc),
+                )
+
     async def save_error(self, domain: str, reason: str, unknown_ttl: int) -> None:
         """Cache a short-lived 'could not verify' marker so we don't retry
         the same broken domain in a tight loop."""
