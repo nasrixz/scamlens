@@ -34,7 +34,8 @@ async def blocked(
         rows = await conn.fetch(
             f"""
             SELECT id, domain, reason, verdict, ai_confidence, risk_score,
-                   mimics_brand, country, created_at
+                   mimics_brand, country, resolved_ip::text AS resolved_ip,
+                   created_at
             FROM blocked_attempts
             {where}
             ORDER BY created_at DESC

@@ -34,6 +34,7 @@ async def check(
     raw = await redis.get(f"verdict:{normalized}")
     if raw:
         data = json.loads(raw)
+        resolved_ip = await _latest_resolved_ip(pool, normalized)
         return CheckResponse(
             domain=normalized,
             verdict=data.get("verdict", "unknown"),
@@ -41,6 +42,7 @@ async def check(
             confidence=data.get("confidence"),
             reason=data.get("reason"),
             mimics_brand=data.get("mimics_brand"),
+            resolved_ip=resolved_ip,
             source=data.get("source", "cache"),
             cached=True,
         )
@@ -48,6 +50,7 @@ async def check(
     # 2. Postgres fallback (older verdict AI may have expired in Redis)
     row = await _pg_verdict(pool, normalized)
     if row:
+        resolved_ip = await _latest_resolved_ip(pool, normalized)
         return CheckResponse(
             domain=normalized,
             verdict=row["verdict"],
@@ -55,6 +58,7 @@ async def check(
             confidence=row["confidence"],
             reason=_first_reason(row["reasons"]),
             mimics_brand=row["mimics_brand"],
+            resolved_ip=resolved_ip,
             source=row["source"],
             cached=False,
         )
@@ -72,6 +76,19 @@ async def _pg_verdict(pool, domain: str) -> Optional[dict]:
             """
             SELECT verdict, risk_score, confidence, reasons, mimics_brand, source
             FROM domain_verdicts WHERE domain = $1
+            """,
+            domain,
+        )
+
+
+async def _latest_resolved_ip(pool, domain: str) -> Optional[str]:
+    """Return the resolved_ip from the latest blocked_attempts row."""
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """
+            SELECT resolved_ip::text FROM blocked_attempts
+            WHERE domain = $1 AND resolved_ip IS NOT NULL
+            ORDER BY created_at DESC LIMIT 1
             """,
             domain,
         )

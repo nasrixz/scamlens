@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import structlog
-from dnslib import DNSRecord, RR, QTYPE, A, AAAA, RCODE
+from dnslib import DNSRecord, RR, QTYPE, A, AAAA, RCODE, DNSQuestion
 
 from .cache import Verdict, VerdictCache, VERDICT_SCAM
 from .config import Config
@@ -147,7 +147,7 @@ class Resolver:
         else:
             reply.header.rcode = RCODE.NXDOMAIN
 
-        asyncio.create_task(self._db.log_block(
+        asyncio.create_task(self._resolve_then_log(
             domain=domain,
             reason=verdict.reason or verdict.source,
             verdict=verdict.verdict,
@@ -181,7 +181,7 @@ class Resolver:
         else:
             reply.header.rcode = RCODE.NXDOMAIN
 
-        asyncio.create_task(self._db.log_block(
+        asyncio.create_task(self._resolve_then_log(
             domain=domain,
             reason=verdict.reason,
             verdict=verdict.verdict,
@@ -218,6 +218,32 @@ class Resolver:
         if claimed:
             await self._cache.enqueue_scan(domain)
             log.info("scan_enqueued", domain=domain)
+
+    async def _resolve_then_log(self, **kwargs) -> None:
+        """Resolve the scam domain via upstream so the block log captures
+        the real IP it would have pointed at. Runs in a background task —
+        never blocks the DNS reply path."""
+        domain = kwargs["domain"]
+        ip = await self._resolve_scam_ip(domain)
+        await self._db.log_block(resolved_ip=ip, **kwargs)
+        if ip:
+            log.info("blocked_resolved", domain=domain, resolved_ip=ip)
+
+    async def _resolve_scam_ip(self, domain: str) -> Optional[str]:
+        """Issue an A query upstream for the blocked domain and return the
+        first A record. Returns None on failure. Bounded by upstream timeout."""
+        try:
+            q = DNSRecord(q=DNSQuestion(domain, QTYPE.A))
+            answer = await self._upstream.query(q.pack())
+            if not answer:
+                return None
+            reply = DNSRecord.parse(answer)
+            for rr in reply.rr:
+                if rr.rtype == QTYPE.A:
+                    return str(rr.rdata)
+        except Exception as exc:
+            log.info("resolve_scam_ip_failed", domain=domain, error=str(exc)[:120])
+        return None
 
 
 def _is_bypass(domain: str) -> bool:

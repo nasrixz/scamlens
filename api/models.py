@@ -34,6 +34,7 @@ class BlockedRow(BaseModel):
     risk_score: Optional[int] = None
     mimics_brand: Optional[str] = None
     country: Optional[str] = None
+    resolved_ip: Optional[str] = None   # scam server's real upstream IP
     created_at: datetime
 
 
@@ -75,6 +76,7 @@ class CheckResponse(BaseModel):
     confidence: Optional[int] = None
     reason: Optional[str] = None
     mimics_brand: Optional[str] = None
+    resolved_ip: Optional[str] = None  # real upstream IP of the scam server
     source: str
     cached: bool
 

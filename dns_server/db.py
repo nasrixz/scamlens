@@ -74,6 +74,7 @@ class Database:
         confidence: int,
         mimics_brand: Optional[str],
         client_ip: Optional[str],
+        resolved_ip: Optional[str] = None,
     ) -> None:
         if not self._pool:
             return
@@ -82,11 +83,11 @@ class Database:
                 """
                 INSERT INTO blocked_attempts
                   (domain, reason, verdict, risk_score, ai_confidence,
-                   mimics_brand, client_ip)
-                VALUES ($1, $2, $3, $4, $5, $6, $7::inet)
+                   mimics_brand, client_ip, resolved_ip)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8::inet)
                 """,
                 domain, reason, verdict, risk_score, confidence,
-                mimics_brand, client_ip,
+                mimics_brand, client_ip, resolved_ip,
             )
         except Exception as exc:
             log.warning("log_block_failed", domain=domain, error=str(exc))

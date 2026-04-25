@@ -26,6 +26,26 @@ async function getStats(): Promise<Stats | null> {
   }
 }
 
+type Geo = {
+  success: boolean;
+  ip?: string;
+  country?: string;
+  country_code?: string;
+  region?: string;
+  city?: string;
+  flag_emoji?: string;
+  connection?: { asn?: number; org?: string; isp?: string };
+  message?: string;
+};
+
+async function getGeo(ip: string): Promise<Geo | null> {
+  try {
+    return await apiGet<Geo>(`/geo/${ip}`);
+  } catch {
+    return null;
+  }
+}
+
 export default async function BlockPage() {
   const h = await headers();
   const host = (h.get("x-original-host") || h.get("host") || "").split(":")[0];
@@ -38,6 +58,14 @@ export default async function BlockPage() {
   const brand = result?.mimics_brand ?? null;
   const risk = result?.risk_score ?? null;
   const source = result?.source ?? null;
+  const resolvedIp = result?.resolved_ip ?? null;
+  const geo = resolvedIp ? await getGeo(resolvedIp) : null;
+  const placeParts = geo && geo.success
+    ? [geo.city, geo.region, geo.country].filter(Boolean)
+    : [];
+  const place = placeParts.join(", ");
+  const isp = geo?.connection?.isp || geo?.connection?.org || null;
+  const asn = geo?.connection?.asn ? `AS${geo.connection.asn}` : null;
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -91,6 +119,34 @@ export default async function BlockPage() {
             )}
           </div>
         </div>
+
+        {resolvedIp && (
+          <div className="mt-4 rounded-2xl border border-zinc-800 bg-black/40 p-5 text-sm">
+            <div className="text-xs uppercase tracking-wider text-zinc-500">
+              Where this scam is hosted
+            </div>
+            <div className="mt-2 grid gap-1 text-zinc-200">
+              <div>
+                <span className="text-zinc-500">IP:</span>{" "}
+                <span className="font-mono">{resolvedIp}</span>
+              </div>
+              {place && (
+                <div>
+                  <span className="text-zinc-500">Location:</span>{" "}
+                  {geo?.flag_emoji ? `${geo.flag_emoji} ` : ""}
+                  {place}
+                </div>
+              )}
+              {(isp || asn) && (
+                <div>
+                  <span className="text-zinc-500">Hosted by:</span>{" "}
+                  {isp ?? "—"}
+                  {asn ? ` (${asn})` : ""}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
           <a

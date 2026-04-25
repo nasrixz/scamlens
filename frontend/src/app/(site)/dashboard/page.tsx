@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { fetcher, type BlockedPage, type Stats } from "@/lib/api";
 import { StatCard } from "@/components/StatCard";
+import { GeoLine } from "@/components/GeoLine";
 
 export default function Dashboard() {
   const { data: stats } = useSWR<Stats>("/stats", fetcher, { refreshInterval: 10000 });
@@ -121,6 +122,8 @@ export default function Dashboard() {
                         <div>Verdict: {row.verdict ?? "—"}</div>
                         <div>Risk score: {row.risk_score ?? "—"}</div>
                         <div>Mimics brand: {row.mimics_brand ?? "—"}</div>
+                        <div>Real IP: <span className="font-mono">{row.resolved_ip ?? "—"}</span></div>
+                        {row.resolved_ip && <GeoLine ip={row.resolved_ip} />}
                       </td>
                     </tr>
                   )}

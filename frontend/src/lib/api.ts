@@ -42,6 +42,7 @@ export type BlockedRow = {
   risk_score: number | null;
   mimics_brand: string | null;
   country: string | null;
+  resolved_ip: string | null;
   created_at: string;
 };
 
@@ -59,6 +60,7 @@ export type CheckResult = {
   confidence: number | null;
   reason: string | null;
   mimics_brand: string | null;
+  resolved_ip: string | null;
   source: string;
   cached: boolean;
 };
