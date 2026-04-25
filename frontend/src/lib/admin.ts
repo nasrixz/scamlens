@@ -124,5 +124,7 @@ export type DomainRow = {
   category?: string | null;
   reason?: string | null;
   added_by?: string | null;
+  source_post?: string | null;
+  source_platform?: string | null;
   added_at: string;
 };

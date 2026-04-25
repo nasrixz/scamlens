@@ -296,7 +296,17 @@ function DomainPanel({
               <tr key={r.domain}>
                 <td className="px-4 py-2 font-medium">{r.domain}</td>
                 <td className="px-4 py-2 text-zinc-400">
-                  {r.category ?? r.reason ?? "—"}
+                  <div>{r.category ?? r.reason ?? "—"}</div>
+                  {r.source_post && (
+                    <a
+                      href={r.source_post}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-brand hover:underline"
+                    >
+                      ↗ source post ({r.source_platform ?? "link"})
+                    </a>
+                  )}
                 </td>
                 <td className="px-4 py-2 text-zinc-400">
                   {new Date(r.added_at).toLocaleString()}

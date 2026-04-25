@@ -228,8 +228,8 @@ async def list_blocklist(
     """
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT domain, category, added_at FROM blocklist_seed "
-            "ORDER BY added_at DESC LIMIT $1",
+            "SELECT domain, category, source_post, source_platform, added_at "
+            "FROM blocklist_seed ORDER BY added_at DESC LIMIT $1",
             limit,
         )
     return {"items": [dict(r) for r in rows]}

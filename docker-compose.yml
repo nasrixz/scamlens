@@ -66,6 +66,21 @@ services:
       - scamlens_net
     shm_size: "1gb"
 
+  social_scraper:
+    build:
+      context: .
+      dockerfile: social_scraper/Dockerfile
+    container_name: scamlens_social_scraper
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - scamlens_net
+
   api:
     build:
       context: .
