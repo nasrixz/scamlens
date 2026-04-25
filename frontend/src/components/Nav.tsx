@@ -13,6 +13,7 @@ export function Nav() {
           <Link href="/setup/android" className="hover:text-white transition-colors hover:text-glow">Setup</Link>
           <Link href="/report" className="hover:text-white transition-colors hover:text-glow">Report</Link>
           <Link href="/about" className="hover:text-white transition-colors hover:text-glow">About</Link>
+          <Link href="/login" className="rounded-full border border-zinc-700 px-3 py-1 text-xs text-zinc-200 hover:border-brand hover:text-brand transition-colors">Sign in</Link>
         </nav>
       </div>
     </header>

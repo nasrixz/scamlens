@@ -10,14 +10,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, 
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth import (
-    AdminPrincipal,
     COOKIE_NAME,
+    Principal,
     current_admin,
-    fetch_admin_by_email,
+    fetch_by_email,
     issue_token,
     touch_last_login,
     verify_password,
 )
+
+# Backwards-compat alias for existing references in this file.
+AdminPrincipal = Principal
+fetch_admin_by_email = fetch_by_email
 from ..deps import get_cfg, get_pool, get_redis
 from ..rate_limit import limiter
 

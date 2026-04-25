@@ -1,22 +1,34 @@
-"""Create or reset an admin account.
+"""Create or reset an admin (or upgrade a user) account.
 
-Usage (from repo root, stack running):
+Usage:
     docker compose exec -T api python -m scripts.create_admin admin@vendly.my
+    docker compose exec -T api python -m scripts.create_admin admin@vendly.my --password STRONGPW
 
-You'll be prompted for a password. Script upserts the user into `admins`
-with a bcrypt hash.
-
-Run again with the same email to reset the password.
+Always inserts/updates the row in `users` with role='admin'. Generates an
+invite_code + doh_token if missing.
 """
 from __future__ import annotations
 
 import asyncio
 import getpass
 import os
+import secrets
+import string
 import sys
 
 import asyncpg
 import bcrypt
+
+
+INVITE_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def new_invite_code(length: int = 8) -> str:
+    return "".join(secrets.choice(INVITE_ALPHABET) for _ in range(length))
+
+
+def new_doh_token() -> str:
+    return secrets.token_urlsafe(48)
 
 
 async def main() -> int:
@@ -44,11 +56,13 @@ async def main() -> int:
         hashed = bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
         await conn.execute(
             """
-            INSERT INTO admins (email, password_hash, role)
-            VALUES ($1, $2, 'admin')
-            ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+            INSERT INTO users (email, password_hash, role, invite_code, doh_token)
+            VALUES ($1, $2, 'admin', $3, $4)
+            ON CONFLICT (email) DO UPDATE SET
+              password_hash = EXCLUDED.password_hash,
+              role = 'admin'
             """,
-            email, hashed,
+            email, hashed, new_invite_code(), new_doh_token(),
         )
         print(f"[scamlens] admin ready: {email}")
     finally:

@@ -1,6 +1,13 @@
-"""Admin auth — bcrypt password check + JWT session."""
+"""Authentication for both regular users and admins.
+
+One `users` table. Role-based access for admin endpoints. JWT in an
+HttpOnly cookie. Helper generators produce the friendly invite code
+and the per-user DoH token.
+"""
 from __future__ import annotations
 
+import secrets
+import string
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -13,15 +20,24 @@ from .config import Config
 from .deps import get_cfg, get_pool
 
 
-COOKIE_NAME = "scamlens_admin"
+COOKIE_NAME = "scamlens_session"
+INVITE_ALPHABET = string.ascii_uppercase + string.digits  # human-friendly
 
 
 @dataclass
-class AdminPrincipal:
+class Principal:
     id: int
     email: str
     role: str
+    invite_code: str
+    doh_token: str
 
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+
+# ----------------------------- crypto helpers -------------------------------
 
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
@@ -34,12 +50,24 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def issue_token(cfg: Config, admin_id: int, email: str, role: str) -> str:
+def new_invite_code(length: int = 8) -> str:
+    """e.g. 'A4B9XK7Q' — easy to read aloud, hard to guess."""
+    return "".join(secrets.choice(INVITE_ALPHABET) for _ in range(length))
+
+
+def new_doh_token() -> str:
+    """64-char URL-safe random suitable for the per-user DoH path."""
+    return secrets.token_urlsafe(48)
+
+
+# ----------------------------- jwt helpers ----------------------------------
+
+def issue_token(cfg: Config, user_id: int, email: str, role: str) -> str:
     if not cfg.jwt_secret:
         raise RuntimeError("JWT_SECRET not configured")
     now = int(time.time())
     payload = {
-        "sub": str(admin_id),
+        "sub": str(user_id),
         "email": email,
         "role": role,
         "iat": now,
@@ -48,26 +76,50 @@ def issue_token(cfg: Config, admin_id: int, email: str, role: str) -> str:
     return jwt.encode(payload, cfg.jwt_secret, algorithm="HS256")
 
 
-def decode_token(cfg: Config, token: str) -> AdminPrincipal:
+def decode_token(cfg: Config, token: str) -> dict:
     try:
-        payload = jwt.decode(token, cfg.jwt_secret, algorithms=["HS256"])
+        return jwt.decode(token, cfg.jwt_secret, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
-    return AdminPrincipal(
-        id=int(payload["sub"]),
-        email=payload["email"],
-        role=payload.get("role", "admin"),
-    )
 
 
-async def current_admin(
+# ----------------------------- DB lookups -----------------------------------
+
+async def fetch_by_email(pool, email: str):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT id, email, password_hash, role, invite_code, doh_token "
+            "FROM users WHERE email = $1",
+            email.lower().strip(),
+        )
+
+
+async def fetch_by_id(pool, user_id: int):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT id, email, role, invite_code, doh_token "
+            "FROM users WHERE id = $1",
+            user_id,
+        )
+
+
+async def touch_last_login(pool, user_id: int):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET last_login_at = now() WHERE id = $1", user_id,
+        )
+
+
+# ----------------------------- principals -----------------------------------
+
+async def current_principal(
     request: Request,
     cfg: Config = Depends(get_cfg),
+    pool=Depends(get_pool),
     session_cookie: Optional[str] = Cookie(default=None, alias=COOKIE_NAME),
-) -> AdminPrincipal:
-    # Accept either Authorization: Bearer <token> or cookie.
+) -> Principal:
     token = session_cookie
     if not token:
         auth = request.headers.get("authorization", "")
@@ -75,19 +127,21 @@ async def current_admin(
             token = auth[7:].strip()
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
-    return decode_token(cfg, token)
+    payload = decode_token(cfg, token)
+    user_id = int(payload["sub"])
+    row = await fetch_by_id(pool, user_id)
+    if not row:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found")
+    return Principal(
+        id=row["id"],
+        email=row["email"],
+        role=row["role"],
+        invite_code=row["invite_code"],
+        doh_token=row["doh_token"],
+    )
 
 
-async def fetch_admin_by_email(pool, email: str):
-    async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            "SELECT id, email, password_hash, role FROM admins WHERE email = $1",
-            email.lower().strip(),
-        )
-
-
-async def touch_last_login(pool, admin_id: int):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE admins SET last_login_at = now() WHERE id = $1", admin_id,
-        )
+async def current_admin(who: Principal = Depends(current_principal)) -> Principal:
+    if not who.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin only")
+    return who
