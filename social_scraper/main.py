@@ -44,16 +44,17 @@ async def run() -> None:
     log = structlog.get_logger()
 
     if not cfg.threads_token:
-        log.warning("scraper_disabled", reason="THREADS_ACCESS_TOKEN not set")
-        # Sleep forever; orchestrator restart will pick up token.
-        while True:
-            await asyncio.sleep(3600)
+        log.warning(
+            "threads_token_missing",
+            note="Threads source disabled. URLhaus + Reddit still work.",
+        )
 
     log.info(
         "scraper_boot",
         keywords=len(cfg.keywords),
         duration_min=cfg.duration_minutes,
         interval_hr=cfg.interval_hours,
+        threads=bool(cfg.threads_token),
     )
 
     pool = await asyncpg.create_pool(
@@ -77,18 +78,28 @@ async def run() -> None:
         loop.add_signal_handler(sig, stop.set)
 
     try:
+        # Cron-driven sources. URLhaus is always-on (free, classified).
+        # Threads only runs if a token is set; Reddit always runs.
+        cron_sources = ["urlhaus", "reddit"]
+        if cfg.threads_token:
+            cron_sources.append("threads")
+
         while not stop.is_set():
-            # Acquire lock so a manual run can't collide with the cron loop.
-            claimed = await redis.set(LOCK_KEY, "cron", ex=LOCK_TTL, nx=True)
-            if claimed:
-                try:
-                    await worker.run_window()
-                except Exception as exc:
-                    log.exception("scrape_window_failed", error=str(exc))
-                finally:
-                    await redis.delete(LOCK_KEY)
-            else:
-                log.info("scrape_skipped", reason="manual run in progress")
+            for source in cron_sources:
+                if stop.is_set():
+                    break
+                # Acquire lock so a manual run can't collide.
+                claimed = await redis.set(LOCK_KEY, f"cron:{source}", ex=LOCK_TTL, nx=True)
+                if claimed:
+                    try:
+                        log.info("cron_source_start", source=source)
+                        await worker.run_window(source=source)
+                    except Exception as exc:
+                        log.exception("scrape_window_failed", source=source, error=str(exc))
+                    finally:
+                        await redis.delete(LOCK_KEY)
+                else:
+                    log.info("scrape_skipped", source=source, reason="manual run in progress")
 
             sleep_for = max(60, cfg.interval_hours * 3600 - cfg.duration_minutes * 60)
             log.info("scraper_idle", sleep_seconds=sleep_for)
