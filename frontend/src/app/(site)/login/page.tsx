@@ -19,7 +19,7 @@ export default function LoginPage() {
     try {
       await userApi.login(email, password);
       if ("Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission();
+        await Notification.requestPermission();
       }
       router.push("/account");
     } catch (e) {
