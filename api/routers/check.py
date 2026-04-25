@@ -30,6 +30,22 @@ async def check(
     if not DOMAIN_RE.match(normalized):
         raise HTTPException(status_code=400, detail="invalid domain")
 
+    # 0. Blocklist beats everything else, even a stale 'safe' AI verdict.
+    bl = await _blocklist_match(pool, normalized)
+    if bl:
+        resolved_ip = await _latest_resolved_ip(pool, normalized)
+        return CheckResponse(
+            domain=normalized,
+            verdict="scam",
+            risk_score=100,
+            confidence=100,
+            reason=f"on blocklist ({bl})",
+            mimics_brand=None,
+            resolved_ip=resolved_ip,
+            source="blocklist",
+            cached=False,
+        )
+
     # 1. Redis cache (freshest — scanner writes here)
     raw = await redis.get(f"verdict:{normalized}")
     if raw:
@@ -79,6 +95,24 @@ async def _pg_verdict(pool, domain: str) -> Optional[dict]:
             """,
             domain,
         )
+
+
+async def _blocklist_match(pool, domain: str) -> Optional[str]:
+    """Walk parent chain against blocklist_seed + confirmed user reports.
+    Returns the matched category/source or None."""
+    parts = domain.split(".")
+    candidates = [".".join(parts[i:]) for i in range(len(parts) - 1)]
+    if not candidates:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT category FROM blocklist_seed WHERE domain = ANY($1::text[])
+            ORDER BY length(domain) DESC LIMIT 1
+            """,
+            candidates,
+        )
+    return row["category"] if row else None
 
 
 async def _latest_resolved_ip(pool, domain: str) -> Optional[str]:
