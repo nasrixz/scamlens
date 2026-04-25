@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { API_BASE, apiGet, type CheckResult } from "@/lib/api";
+import { DeepAnalysis } from "@/components/DeepAnalysis";
 
 type Stats = { total_blocked: number };
 
@@ -163,6 +164,8 @@ export default async function BlockPage() {
           </a>
         </div>
       </div>
+
+      {host && <DeepAnalysis domain={host} />}
 
       {stats && (
         <p className="mt-6 text-center text-sm text-zinc-500">

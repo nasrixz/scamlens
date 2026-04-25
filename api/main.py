@@ -16,7 +16,7 @@ from starlette.requests import Request
 
 from .config import Config
 from .rate_limit import limiter
-from .routers import admin, blocked, check, geo, report, setup, stats
+from .routers import admin, blocked, check, deep, geo, report, setup, stats
 
 
 def _setup_logging(level: str) -> None:
@@ -80,3 +80,4 @@ app.include_router(check.router, prefix="/api")
 app.include_router(setup.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(geo.router, prefix="/api")
+app.include_router(deep.router, prefix="/api")
