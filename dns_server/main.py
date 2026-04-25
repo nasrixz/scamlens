@@ -40,6 +40,7 @@ async def _refresh_lists_loop(
     blocklist: set[str],
     whitelist: set[str],
     typosquat: TyposquatDetector,
+    doh_tokens: dict[str, int],
     interval: int = 300,
 ):
     log = structlog.get_logger()
@@ -56,11 +57,16 @@ async def _refresh_lists_loop(
             brands = await db.load_brand_domains()
             typosquat.__init__({d: b for d, b in brands})
 
+            tokens = await db.load_doh_tokens()
+            doh_tokens.clear()
+            doh_tokens.update(tokens)
+
             log.info(
                 "lists_refreshed",
                 blocklist=len(blocklist),
                 whitelist=len(whitelist),
                 brands=len(brands),
+                doh_tokens=len(doh_tokens),
             )
         except Exception as exc:
             log.warning("lists_refresh_failed", error=str(exc))
@@ -83,23 +89,27 @@ async def run() -> None:
     whitelist: set[str] = set(await db.load_whitelist())
     brand_rows = await db.load_brand_domains()
     typosquat = TyposquatDetector({d: b for d, b in brand_rows})
+    doh_tokens: dict[str, int] = await db.load_doh_tokens()
     log.info(
         "lists_loaded",
         blocklist=len(blocklist),
         whitelist=len(whitelist),
         brands=len(brand_rows),
+        doh_tokens=len(doh_tokens),
     )
     resolver = Resolver(cfg, cache, db, upstream, blocklist, whitelist, typosquat)
 
     # Listeners
     udp = await start_udp(resolver, cfg.bind_host, cfg.dns_port)
     tcp = await start_tcp(resolver, cfg.bind_host, cfg.dns_port)
-    doh = await start_doh(resolver, cfg.bind_host, cfg.doh_port)
+    doh = await start_doh(resolver, cfg.bind_host, cfg.doh_port, doh_tokens)
 
     # Background refresh: pulls blocklist + whitelist + brand list from
     # Postgres every 5 minutes so admin edits propagate without a restart.
     refresh_task = asyncio.create_task(
-        _refresh_lists_loop(db, blocklist, whitelist, typosquat, interval=300)
+        _refresh_lists_loop(
+            db, blocklist, whitelist, typosquat, doh_tokens, interval=300,
+        )
     )
 
     # Graceful shutdown

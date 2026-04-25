@@ -16,3 +16,11 @@ def get_pool(request: Request):
 
 def get_redis(request: Request):
     return request.app.state.redis
+
+
+def get_push(request: Request):
+    return request.app.state.push
+
+
+def get_event_bus(request: Request):
+    return request.app.state.event_bus

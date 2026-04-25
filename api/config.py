@@ -19,6 +19,9 @@ class Config:
     unknown_ttl: int
     jwt_secret: str
     jwt_ttl_hours: int
+    vapid_public_key: str
+    vapid_private_key: str
+    vapid_contact: str
     log_level: str
 
     @classmethod
@@ -39,6 +42,11 @@ class Config:
             unknown_ttl=int(os.getenv("UNKNOWN_TTL_SECONDS", "300")),
             jwt_secret=os.getenv("JWT_SECRET", ""),
             jwt_ttl_hours=int(os.getenv("JWT_TTL_HOURS", "12")),
+            vapid_public_key=os.getenv("VAPID_PUBLIC_KEY", ""),
+            vapid_private_key=os.getenv("VAPID_PRIVATE_KEY", ""),
+            vapid_contact=os.getenv(
+                "VAPID_CONTACT_EMAIL", f"mailto:admin@{domain}"
+            ),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
 

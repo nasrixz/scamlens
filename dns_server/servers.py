@@ -73,22 +73,30 @@ async def start_tcp(resolver: Resolver, host: str, port: int):
     return server
 
 
-def build_doh_app(resolver: Resolver) -> web.Application:
+def build_doh_app(resolver: Resolver, doh_tokens: dict[str, int]) -> web.Application:
     """RFC 8484 DNS-over-HTTPS. application/dns-message body, either POST raw
     or GET with ?dns=<base64url>. Nginx fronts this on 443.
+
+    Two URL forms:
+      /dns-query                  anonymous query (user_id=None)
+      /dns-query/<token>          per-user query — token resolves to user_id,
+                                  bound to the resulting block_event.
+    `doh_tokens` is a shared dict mutated by the refresh loop.
     """
 
-    async def handle_dns_query(request: web.Request) -> web.StreamResponse:
+    async def _process(request: web.Request, token: str | None) -> web.Response:
         client_ip = (
             request.headers.get("X-Real-IP")
             or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
             or (request.remote or "")
         )
+        user_id = doh_tokens.get(token) if token else None
+
         if request.method == "POST":
             if request.headers.get("Content-Type") != "application/dns-message":
                 return web.Response(status=415, text="unsupported media type")
             wire = await request.read()
-        else:  # GET
+        else:
             raw = request.query.get("dns")
             if not raw:
                 return web.Response(status=400, text="missing dns param")
@@ -100,17 +108,28 @@ def build_doh_app(resolver: Resolver) -> web.Application:
         if not wire:
             return web.Response(status=400, text="empty query")
 
-        result = await resolver.resolve(wire, client_ip=client_ip or None)
+        result = await resolver.resolve(
+            wire, client_ip=client_ip or None, user_id=user_id,
+        )
         return web.Response(
             body=result.wire, content_type="application/dns-message",
         )
+
+    async def handle_anon(request: web.Request) -> web.StreamResponse:
+        return await _process(request, None)
+
+    async def handle_with_token(request: web.Request) -> web.StreamResponse:
+        token = request.match_info.get("token")
+        return await _process(request, token)
 
     async def health(_: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
 
     app = web.Application()
-    app.router.add_route("GET", "/dns-query", handle_dns_query)
-    app.router.add_route("POST", "/dns-query", handle_dns_query)
+    app.router.add_route("GET", "/dns-query", handle_anon)
+    app.router.add_route("POST", "/dns-query", handle_anon)
+    app.router.add_route("GET", "/dns-query/{token}", handle_with_token)
+    app.router.add_route("POST", "/dns-query/{token}", handle_with_token)
     app.router.add_route("GET", "/health", health)
     return app
 
@@ -119,8 +138,13 @@ def _pad_b64(s: str) -> str:
     return s + "=" * (-len(s) % 4)
 
 
-async def start_doh(resolver: Resolver, host: str, port: int) -> web.AppRunner:
-    app = build_doh_app(resolver)
+async def start_doh(
+    resolver: Resolver,
+    host: str,
+    port: int,
+    doh_tokens: dict[str, int],
+) -> web.AppRunner:
+    app = build_doh_app(resolver, doh_tokens)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)

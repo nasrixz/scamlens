@@ -5,6 +5,7 @@ DNS hot path must NOT block on the DB — callers fire-and-forget via
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 import asyncpg
@@ -26,6 +27,17 @@ class Database:
     async def close(self) -> None:
         if self._pool:
             await self._pool.close()
+
+    async def load_doh_tokens(self) -> dict[str, int]:
+        """All active DoH tokens → user_id. DNS server caches the map and
+        refreshes on the same loop as the lists. Tokens are unique per user."""
+        if not self._pool:
+            return {}
+        try:
+            rows = await self._pool.fetch("SELECT doh_token, id FROM users")
+            return {r["doh_token"]: r["id"] for r in rows}
+        except Exception:
+            return {}
 
     async def load_blocklist(self) -> list[str]:
         """Return all known scam domains from blocklist_seed + confirmed reports."""
@@ -92,6 +104,7 @@ class Database:
         mimics_brand: Optional[str],
         client_ip: Optional[str],
         resolved_ip: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> None:
         if not self._pool:
             return
@@ -100,11 +113,11 @@ class Database:
                 """
                 INSERT INTO blocked_attempts
                   (domain, reason, verdict, risk_score, ai_confidence,
-                   mimics_brand, client_ip, resolved_ip)
-                VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8::inet)
+                   mimics_brand, client_ip, resolved_ip, user_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8::inet, $9)
                 """,
                 domain, reason, verdict, risk_score, confidence,
-                mimics_brand, client_ip, resolved_ip,
+                mimics_brand, client_ip, resolved_ip, user_id,
             )
         except Exception as exc:
             log.warning("log_block_failed", domain=domain, error=str(exc))

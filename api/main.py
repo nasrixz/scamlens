@@ -14,10 +14,14 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import JSONResponse
 from starlette.requests import Request
 
+import asyncio
+
 from .config import Config
+from .events import EventBus, run_subscriber
+from .push import PushSender
 from .rate_limit import limiter
 from .routers import (
-    admin, auth, blocked, check, deep, geo, me, report, setup, stats,
+    admin, auth, blocked, check, deep, events, geo, me, push, report, setup, stats,
 )
 
 
@@ -44,9 +48,26 @@ async def lifespan(app: FastAPI):
         cfg.database_url, min_size=1, max_size=10, command_timeout=10,
     )
     app.state.redis = Redis.from_url(cfg.redis_url, decode_responses=True)
+    app.state.push = PushSender(
+        cfg.vapid_public_key, cfg.vapid_private_key, cfg.vapid_contact,
+    )
+    app.state.event_bus = EventBus()
+
+    # Background: listen to Redis pubsub for block events, fan out push + SSE.
+    subscriber_task = asyncio.create_task(
+        run_subscriber(
+            app.state.redis, app.state.pg_pool,
+            app.state.push, app.state.event_bus,
+        )
+    )
 
     yield
 
+    subscriber_task.cancel()
+    try:
+        await subscriber_task
+    except asyncio.CancelledError:
+        pass
     await app.state.pg_pool.close()
     await app.state.redis.aclose()
 
@@ -59,7 +80,7 @@ app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_boot_cfg.cors_origins or ["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -85,3 +106,5 @@ app.include_router(geo.router, prefix="/api")
 app.include_router(deep.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(me.router, prefix="/api")
+app.include_router(push.router, prefix="/api")
+app.include_router(events.router, prefix="/api")

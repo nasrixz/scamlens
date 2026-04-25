@@ -60,7 +60,12 @@ class Resolver:
         self._whitelist = whitelist
         self._typosquat = typosquat
 
-    async def resolve(self, wire: bytes, client_ip: Optional[str]) -> ResolveResult:
+    async def resolve(
+        self,
+        wire: bytes,
+        client_ip: Optional[str],
+        user_id: Optional[int] = None,
+    ) -> ResolveResult:
         try:
             request = DNSRecord.parse(wire)
         except Exception as exc:
@@ -82,12 +87,12 @@ class Resolver:
             verdict = Verdict(
                 verdict=VERDICT_SCAM, reason="blocklist", source="blocklist",
             )
-            return self._block(request, qname, qtype, verdict, client_ip)
+            return self._block(request, qname, qtype, verdict, client_ip, user_id)
 
         # 3) Redis cache hit (scanner verdict or short-lived pending marker).
         cached = await self._cache_lookup(qname)
         if cached and cached.is_blocking:
-            return self._block(request, qname, qtype, cached, client_ip)
+            return self._block(request, qname, qtype, cached, client_ip, user_id)
         if cached and cached.verdict == "safe":
             return await self._forward(request, wire, qname)
 
@@ -101,11 +106,10 @@ class Resolver:
                 confidence=85 if hit.distance == 0 else 70,
                 risk_score=90 if hit.distance == 0 else 75,
             )
-            # Cache the verdict so future queries skip the check entirely.
             asyncio.create_task(
                 self._cache.set(qname, verdict, ttl=self._cfg.scam_ttl)
             )
-            return self._block_with_brand(request, qname, qtype, verdict, hit, client_ip)
+            return self._block_with_brand(request, qname, qtype, verdict, hit, client_ip, user_id)
 
         # 5) Forward first — no delay to user — then trigger scan.
         result = await self._forward(request, wire, qname)
@@ -135,6 +139,7 @@ class Resolver:
         qtype: str,
         verdict: Verdict,
         client_ip: Optional[str],
+        user_id: Optional[int] = None,
     ) -> ResolveResult:
         reply = request.reply()
         if qtype == "A":
@@ -155,6 +160,7 @@ class Resolver:
             confidence=verdict.confidence,
             mimics_brand=None,
             client_ip=client_ip,
+            user_id=user_id,
         ))
         # Every block must end up visible in the admin Blocklist tab so the
         # operator can audit + override via whitelist. Source 'blocklist'
@@ -177,6 +183,7 @@ class Resolver:
         verdict: Verdict,
         hit: TyposquatHit,
         client_ip: Optional[str],
+        user_id: Optional[int] = None,
     ) -> ResolveResult:
         reply = request.reply()
         if qtype == "A":
@@ -197,6 +204,7 @@ class Resolver:
             confidence=verdict.confidence,
             mimics_brand=hit.brand,
             client_ip=client_ip,
+            user_id=user_id,
         ))
         # Make typosquat hits visible in the admin Blocklist tab so the
         # operator can audit + remove false positives. Fire-and-forget.
@@ -235,12 +243,33 @@ class Resolver:
     async def _resolve_then_log(self, **kwargs) -> None:
         """Resolve the scam domain via upstream so the block log captures
         the real IP it would have pointed at. Runs in a background task —
-        never blocks the DNS reply path."""
+        never blocks the DNS reply path. Also publishes a 'block_event'
+        Redis pubsub message so the API can fan out push + SSE."""
         domain = kwargs["domain"]
         ip = await self._resolve_scam_ip(domain)
         await self._db.log_block(resolved_ip=ip, **kwargs)
         if ip:
             log.info("blocked_resolved", domain=domain, resolved_ip=ip)
+
+        user_id = kwargs.get("user_id")
+        if user_id is not None:
+            try:
+                payload = {
+                    "user_id": user_id,
+                    "domain": domain,
+                    "reason": kwargs.get("reason"),
+                    "verdict": kwargs.get("verdict"),
+                    "risk_score": kwargs.get("risk_score"),
+                    "confidence": kwargs.get("confidence"),
+                    "mimics_brand": kwargs.get("mimics_brand"),
+                    "resolved_ip": ip,
+                }
+                import json as _json
+                await self._cache._redis.publish(
+                    "scamlens:block_events", _json.dumps(payload),
+                )
+            except Exception as exc:
+                log.warning("publish_failed", error=str(exc)[:160])
 
     async def _resolve_scam_ip(self, domain: str) -> Optional[str]:
         """Issue an A query upstream for the blocked domain and return the
