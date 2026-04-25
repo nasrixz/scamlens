@@ -124,23 +124,25 @@ class QwenClient(AIClient):
         self._model = model
 
     async def scan(self, domain: str, html: str, screenshot_png: bytes) -> ScanVerdict:
+        # Qwen-VL via DashScope OpenAI-compat rejects a separate `system` role
+        # alongside multimodal user content (returns "model input format
+        # error"). Inline the system prompt as a leading text part inside the
+        # single user message.
         image_data_url = (
             "data:image/png;base64,"
             + base64.b64encode(screenshot_png).decode()
         )
+        prompt_text = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"Domain being analyzed: {domain}\n\n"
+            f"HTML content (truncated):\n```html\n{html}\n```"
+        )
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [
                     {"type": "image_url", "image_url": {"url": image_data_url}},
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Domain being analyzed: {domain}\n\n"
-                            f"HTML content (truncated):\n```html\n{html}\n```"
-                        ),
-                    },
+                    {"type": "text", "text": prompt_text},
                 ],
             },
         ]
@@ -156,7 +158,6 @@ class QwenClient(AIClient):
                     model=self._model,
                     messages=messages,
                     max_tokens=600,
-                    temperature=0.0,
                 )
                 text = resp.choices[0].message.content or ""
                 return _parse_verdict(text, model=self._model)
