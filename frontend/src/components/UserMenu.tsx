@@ -64,13 +64,6 @@ export function UserMenu() {
                 >
                   Dashboard
                 </Link>
-                <Link
-                  href="/account"
-                  onClick={() => setMenuOpen(false)}
-                  className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
-                >
-                  Account
-                </Link>
                 {user.role === "admin" && (
                   <Link
                     href="/admin"
@@ -80,6 +73,13 @@ export function UserMenu() {
                     Admin
                   </Link>
                 )}
+                <Link
+                  href="/account"
+                  onClick={() => setMenuOpen(false)}
+                  className="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                >
+                  Account
+                </Link>
                 <button
                   onClick={handleLogout}
                   className="block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-zinc-800"
