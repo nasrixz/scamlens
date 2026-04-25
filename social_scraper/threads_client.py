@@ -26,16 +26,23 @@ from tenacity import (
 log = structlog.get_logger()
 
 GRAPH_BASE = "https://graph.threads.net/v1.0"
-DEFAULT_FIELDS = "id,text,permalink,username,timestamp"
+DEFAULT_FIELDS = (
+    "id,text,media_type,permalink,timestamp,username,"
+    "has_replies,is_quote_post,is_reply"
+)
 
 
 @dataclass
 class ThreadsPost:
     id: str
     text: str
+    media_type: str
     permalink: str
     username: str
     timestamp: str
+    has_replies: bool
+    is_quote_post: bool
+    is_reply: bool
 
 
 class ThreadsClient:
@@ -71,9 +78,13 @@ class ThreadsClient:
                     yield ThreadsPost(
                         id=raw.get("id", ""),
                         text=raw.get("text", "") or "",
+                        media_type=(raw.get("media_type") or "").upper(),
                         permalink=raw.get("permalink", "") or "",
                         username=raw.get("username", "") or "",
                         timestamp=raw.get("timestamp", "") or "",
+                        has_replies=bool(raw.get("has_replies")),
+                        is_quote_post=bool(raw.get("is_quote_post")),
+                        is_reply=bool(raw.get("is_reply")),
                     )
 
                 paging = payload.get("paging") or {}

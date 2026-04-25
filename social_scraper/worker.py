@@ -73,6 +73,11 @@ class ScrapeWorker:
         return stats
 
     async def _handle_post(self, post: ThreadsPost, stats: RunStats) -> None:
+        # Skip pure replies and quote posts — they piggy-back context from
+        # the parent thread and often don't carry their own link. We focus
+        # on top-level posts where a scammer drops their domain in plain text.
+        if post.is_reply or post.is_quote_post:
+            return
         urls = extract_urls(post.text)
         if not urls:
             return
