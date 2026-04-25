@@ -83,6 +83,8 @@ export type ScanReport = {
   domain: string;
   fetched: boolean;
   error?: string;
+  empty_page?: boolean;
+  empty_reason?: string;
   final_url?: string;
   status?: number;
   title?: string;

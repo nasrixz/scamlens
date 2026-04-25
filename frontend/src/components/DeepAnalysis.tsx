@@ -7,6 +7,8 @@ type DeepReport = {
   domain: string;
   fetched: boolean;
   error?: string;
+  empty_page?: boolean;
+  empty_reason?: string;
   final_url?: string;
   status?: number;
   title?: string;
@@ -18,7 +20,7 @@ type DeepReport = {
     reasons: string[];
     mimics_brand: string | null;
     model: string;
-  };
+  } | null;
   domain_age_days?: number | null;
   links?: {
     domain: string;
@@ -117,6 +119,35 @@ export function DeepAnalysis({ domain }: { domain: string }) {
         <div className="mt-2 text-zinc-300">
           Couldn&apos;t load the page in a sandbox: {r.error ?? "fetch failed"}.
         </div>
+      </div>
+    );
+  }
+  if (r.empty_page) {
+    return (
+      <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 text-sm">
+        <div className="text-xs uppercase tracking-wider text-zinc-500">
+          Deep web analysis
+        </div>
+        <div className="mt-2 text-zinc-200">
+          Skipped — {r.empty_reason ?? "page is empty"}.
+        </div>
+        <div className="mt-1 text-xs text-zinc-500">
+          The page returned no content for the AI to analyze, so we did not
+          waste a scan on it. The domain remains blocked based on the URL
+          signals above.
+        </div>
+        {r.screenshot_base64 && (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-xs uppercase text-zinc-500">
+              Screenshot
+            </summary>
+            <img
+              src={`data:image/png;base64,${r.screenshot_base64}`}
+              alt={`Screenshot of ${r.domain}`}
+              className="mt-2 rounded-lg w-full"
+            />
+          </details>
+        )}
       </div>
     );
   }

@@ -381,6 +381,25 @@ function ScanReportView({ report }: { report: ScanReport }) {
       </div>
     );
   }
+  if (report.empty_page) {
+    return (
+      <div className="rounded-xl border border-zinc-700 bg-zinc-900/40 p-4 text-sm">
+        <div className="font-semibold text-zinc-200">
+          Skipped AI — {report.empty_reason ?? "page is empty"}
+        </div>
+        <div className="mt-1 text-zinc-400">
+          Page returned no content for the AI to analyze. Saved one scan call.
+        </div>
+        {report.screenshot_base64 && (
+          <img
+            src={`data:image/png;base64,${report.screenshot_base64}`}
+            alt="Empty page"
+            className="mt-3 rounded-lg w-full"
+          />
+        )}
+      </div>
+    );
+  }
 
   const v = report.verdict;
   const vColor =
