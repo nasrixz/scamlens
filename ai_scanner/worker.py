@@ -17,6 +17,7 @@ import structlog
 from .ai import AIClient, ScanVerdict
 from .config import Config
 from .fetcher import PageFetcher
+from .heuristics import analyze, render_for_prompt, severity_floor
 from .rdap import AGE_AUTO_SAFE_DAYS, lookup_age
 from .store import VerdictStore
 
@@ -94,11 +95,16 @@ class Worker:
                     log.info("scan_fetch_failed", domain=domain)
                     return
 
+                heuristics = analyze(capture.html, domain)
                 verdict = await self._ai.scan(
                     domain=domain,
                     html=capture.html,
                     screenshot_png=capture.screenshot_png,
+                    heuristic_summary=render_for_prompt(heuristics),
                 )
+
+                # Post-AI floor — heuristics may force a stricter verdict.
+                verdict = _apply_heuristic_floor(verdict, heuristics, domain)
 
                 # If the domain is brand-new AND AI didn't say scam outright,
                 # bump suspicion — freshly-registered domains are high-risk
@@ -137,3 +143,24 @@ class Worker:
                     domain, f"scan error: {type(exc).__name__}",
                     self._cfg.unknown_ttl,
                 )
+
+
+def _apply_heuristic_floor(
+    verdict: ScanVerdict, heuristics, domain: str,
+) -> ScanVerdict:
+    """If the static scan picked up unmistakable phishing fingerprints,
+    promote the verdict to at least the floor severity. AI is the
+    flexible signal; heuristics are the safety net."""
+    rank = {"safe": 0, "suspicious": 1, "scam": 2}
+    floor_verdict, floor_reasons = severity_floor(heuristics, domain)
+    if rank[floor_verdict] <= rank[verdict.verdict]:
+        return verdict
+    extra_score = {"suspicious": 65, "scam": 90}[floor_verdict]
+    return ScanVerdict(
+        verdict=floor_verdict,
+        risk_score=max(verdict.risk_score, extra_score),
+        confidence=max(verdict.confidence, 70),
+        reasons=verdict.reasons + floor_reasons + ["promoted by static-scan heuristics"],
+        mimics_brand=verdict.mimics_brand,
+        model=verdict.model,
+    )

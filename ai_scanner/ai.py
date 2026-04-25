@@ -19,6 +19,8 @@ from tenacity import (
     wait_exponential,
 )
 
+from .heuristics import HeuristicReport, render_for_prompt as render_heuristics
+
 log = structlog.get_logger()
 
 
@@ -95,7 +97,13 @@ class ScanVerdict:
 
 
 class AIClient:
-    async def scan(self, domain: str, html: str, screenshot_png: bytes) -> ScanVerdict:
+    async def scan(
+        self,
+        domain: str,
+        html: str,
+        screenshot_png: bytes,
+        heuristic_summary: str = "",
+    ) -> ScanVerdict:
         raise NotImplementedError
 
 
@@ -107,7 +115,13 @@ class AnthropicClient(AIClient):
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
 
-    async def scan(self, domain: str, html: str, screenshot_png: bytes) -> ScanVerdict:
+    async def scan(
+        self,
+        domain: str,
+        html: str,
+        screenshot_png: bytes,
+        heuristic_summary: str = "",
+    ) -> ScanVerdict:
         user_blocks: list[dict[str, Any]] = [
             {
                 "type": "image",
@@ -119,10 +133,7 @@ class AnthropicClient(AIClient):
             },
             {
                 "type": "text",
-                "text": (
-                    f"Domain being analyzed: {domain}\n\n"
-                    f"HTML content (truncated):\n```html\n{html}\n```"
-                ),
+                "text": _build_user_text(domain, html, heuristic_summary),
             },
         ]
 
@@ -160,7 +171,13 @@ class QwenClient(AIClient):
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
 
-    async def scan(self, domain: str, html: str, screenshot_png: bytes) -> ScanVerdict:
+    async def scan(
+        self,
+        domain: str,
+        html: str,
+        screenshot_png: bytes,
+        heuristic_summary: str = "",
+    ) -> ScanVerdict:
         # Qwen-VL via DashScope OpenAI-compat:
         #   - rejects a separate `system` role alongside multimodal content
         #     (returns "model input format error")
@@ -175,8 +192,7 @@ class QwenClient(AIClient):
         trimmed_html = html[:30000]
         prompt_text = (
             f"{SYSTEM_PROMPT}\n\n"
-            f"Domain being analyzed: {domain}\n\n"
-            f"HTML content (truncated):\n```html\n{trimmed_html}\n```"
+            + _build_user_text(domain, trimmed_html, heuristic_summary)
         )
         messages = [
             {
@@ -211,16 +227,19 @@ class GeminiClient(AIClient):
         self._client = genai.Client(api_key=api_key)
         self._model = model
 
-    async def scan(self, domain: str, html: str, screenshot_png: bytes) -> ScanVerdict:
+    async def scan(
+        self,
+        domain: str,
+        html: str,
+        screenshot_png: bytes,
+        heuristic_summary: str = "",
+    ) -> ScanVerdict:
         from google.genai import types  # noqa: WPS433
 
         contents = [
             types.Part.from_bytes(data=screenshot_png, mime_type="image/png"),
             types.Part.from_text(
-                text=(
-                    f"Domain being analyzed: {domain}\n\n"
-                    f"HTML content (truncated):\n{html}"
-                )
+                text=_build_user_text(domain, html, heuristic_summary)
             ),
         ]
         response = await self._client.aio.models.generate_content(
@@ -267,6 +286,18 @@ def _parse_verdict(text: str, model: str) -> ScanVerdict:
         mimics_brand=data.get("mimics_brand") or None,
         model=model,
     )
+
+
+def _build_user_text(domain: str, html: str, heuristic_summary: str) -> str:
+    """Compose the user-message body. Heuristic summary up top forces the AI
+    to acknowledge concrete signals our static scan already extracted."""
+    head = f"Domain being analyzed: {domain}\n\n"
+    if heuristic_summary:
+        head += (
+            "Static-scan signals (from our pre-AI heuristics — do not ignore):\n"
+            f"{heuristic_summary}\n\n"
+        )
+    return head + f"HTML content (truncated):\n```html\n{html}\n```"
 
 
 def _sniff_image_mime(data: bytes) -> str:

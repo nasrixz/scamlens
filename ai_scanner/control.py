@@ -21,9 +21,10 @@ from urllib.parse import urlparse
 import structlog
 from aiohttp import web
 
-from .ai import AIClient
+from .ai import AIClient, ScanVerdict
 from .config import Config
 from .fetcher import PageFetcher
+from .heuristics import analyze, render_for_prompt, severity_floor
 from .rdap import lookup_age
 from .store import VerdictStore
 
@@ -83,11 +84,14 @@ def build_app(
                 "links": [],
             })
 
+        heuristics = analyze(capture.html, domain)
         verdict = await ai.scan(
             domain=domain,
             html=capture.html,
             screenshot_png=capture.screenshot_png,
+            heuristic_summary=render_for_prompt(heuristics),
         )
+        verdict = _apply_floor(verdict, heuristics, domain)
         # Persist same as worker does so future DNS hits skip the rescan.
         await store.save(
             domain=domain, verdict=verdict,
@@ -131,6 +135,22 @@ def build_app(
 
 
 # ----------------- helpers --------------------------------------------------
+
+def _apply_floor(verdict: ScanVerdict, heuristics, domain: str) -> ScanVerdict:
+    rank = {"safe": 0, "suspicious": 1, "scam": 2}
+    floor_v, floor_r = severity_floor(heuristics, domain)
+    if rank[floor_v] <= rank[verdict.verdict]:
+        return verdict
+    bump = {"suspicious": 65, "scam": 90}[floor_v]
+    return ScanVerdict(
+        verdict=floor_v,
+        risk_score=max(verdict.risk_score, bump),
+        confidence=max(verdict.confidence, 70),
+        reasons=verdict.reasons + floor_r + ["promoted by static-scan heuristics"],
+        mimics_brand=verdict.mimics_brand,
+        model=verdict.model,
+    )
+
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
