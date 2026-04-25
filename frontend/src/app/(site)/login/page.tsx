@@ -18,6 +18,9 @@ export default function LoginPage() {
     setErr(null);
     try {
       await userApi.login(email, password);
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
       router.push("/account");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "login failed");
