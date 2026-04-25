@@ -1,6 +1,7 @@
 anthropic==0.42.0
 google-genai==0.3.0
 openai==1.58.1
+aiohttp==3.11.11
 playwright==1.49.0
 redis[hiredis]==5.2.0
 asyncpg==0.30.0
