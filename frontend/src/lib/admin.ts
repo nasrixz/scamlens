@@ -75,6 +75,37 @@ export const adminApi = {
     }),
   removeWhitelist: (domain: string) =>
     adminFetch(`/whitelist/${encodeURIComponent(domain)}`, { method: "DELETE" }),
+  scan: (url: string) =>
+    adminFetch<ScanReport>("/scan", { method: "POST", json: { url } }),
+};
+
+export type ScanReport = {
+  domain: string;
+  fetched: boolean;
+  error?: string;
+  final_url?: string;
+  status?: number;
+  title?: string;
+  html_excerpt?: string;
+  screenshot_base64?: string;
+  verdict?: {
+    verdict: "safe" | "suspicious" | "scam";
+    risk_score: number;
+    confidence: number;
+    reasons: string[];
+    mimics_brand: string | null;
+    model: string;
+  };
+  domain_age_days?: number | null;
+  links?: {
+    domain: string;
+    first_seen_href: string;
+    cached_verdict: {
+      verdict?: string;
+      risk_score?: number;
+      source?: string;
+    } | null;
+  }[];
 };
 
 export type AdminReport = {

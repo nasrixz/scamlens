@@ -9,8 +9,11 @@ import asyncpg
 import structlog
 from redis.asyncio import Redis
 
+from aiohttp import web
+
 from .ai import build_client
 from .config import Config
+from .control import build_app as build_control_app
 from .fetcher import PageFetcher
 from .store import VerdictStore
 from .worker import Worker
@@ -56,11 +59,21 @@ async def run() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: (worker.stop(), stop.set()))
 
+    # Internal HTTP control plane (admin /scan proxy target). Bound to the
+    # docker network only — no nginx vhost.
+    control_app = build_control_app(cfg, fetcher, ai, redis, store)
+    control_runner = web.AppRunner(control_app, access_log=None)
+    await control_runner.setup()
+    control_site = web.TCPSite(control_runner, host="0.0.0.0", port=8090)
+    await control_site.start()
+    log.info("control_listening", port=8090)
+
     runner = asyncio.create_task(worker.run())
     await stop.wait()
     log.info("scanner_shutting_down")
     await runner
 
+    await control_runner.cleanup()
     await fetcher.close()
     await pg_pool.close()
     await redis.aclose()

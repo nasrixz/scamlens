@@ -2,8 +2,10 @@
 
 All routes except /login require a valid admin session (cookie or Bearer).
 """
+import os
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
@@ -344,3 +346,35 @@ async def remove_brand(
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM brand_domains WHERE domain=$1", domain)
     return {"removed": domain}
+
+
+# ------------------------------- test scan -----------------------------------
+
+class ScanRequest(BaseModel):
+    url: str = Field(..., min_length=3, max_length=2048)
+
+
+SCANNER_URL = os.getenv("SCANNER_URL", "http://ai_scanner:8090")
+
+
+@router.post("/scan")
+async def admin_scan(
+    body: ScanRequest = Body(...),
+    _: AdminPrincipal = Depends(current_admin),
+):
+    """Run a synchronous scan: Playwright fetch + AI verdict + outbound link
+    triage. Proxies to the scanner container's internal /scan endpoint."""
+    try:
+        async with httpx.AsyncClient(timeout=60) as c:
+            resp = await c.post(
+                f"{SCANNER_URL}/scan",
+                json={"url": body.url},
+            )
+        if resp.status_code >= 400:
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=resp.text[:500] or "scanner error",
+            )
+        return resp.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"scanner unreachable: {exc}")

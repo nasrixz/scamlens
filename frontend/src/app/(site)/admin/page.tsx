@@ -7,9 +7,10 @@ import {
   adminApi,
   type AdminReport,
   type DomainRow,
+  type ScanReport,
 } from "@/lib/admin";
 
-type Tab = "reports" | "blocklist" | "whitelist";
+type Tab = "reports" | "blocklist" | "whitelist" | "scan";
 
 export default function AdminHome() {
   const router = useRouter();
@@ -63,8 +64,8 @@ export default function AdminHome() {
         </section>
       )}
 
-      <nav className="mt-8 flex gap-2">
-        {(["reports", "blocklist", "whitelist"] as Tab[]).map((t) => (
+      <nav className="mt-8 flex flex-wrap gap-2">
+        {(["reports", "blocklist", "whitelist", "scan"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -74,7 +75,7 @@ export default function AdminHome() {
                 : "border border-zinc-700 text-zinc-300 hover:border-zinc-500"
             }`}
           >
-            {t[0].toUpperCase() + t.slice(1)}
+            {t === "scan" ? "Test scan" : t[0].toUpperCase() + t.slice(1)}
           </button>
         ))}
       </nav>
@@ -83,6 +84,7 @@ export default function AdminHome() {
         {tab === "reports" && <ReportsPanel onChange={() => reloadCounts(setCounts)} />}
         {tab === "blocklist" && <DomainPanel kind="blocklist" onChange={() => reloadCounts(setCounts)} />}
         {tab === "whitelist" && <DomainPanel kind="whitelist" onChange={() => reloadCounts(setCounts)} />}
+        {tab === "scan" && <ScanPanel />}
       </div>
     </main>
   );
@@ -319,6 +321,193 @@ function DomainPanel({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// -------------------------------- test scan ---------------------------------
+
+function ScanPanel() {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<ScanReport | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    setReport(null);
+    try {
+      const r = await adminApi.scan(url.trim());
+      setReport(r);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "scan failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <form onSubmit={run} className="flex flex-wrap gap-2">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://example.com or any-domain.xyz"
+          required
+          className="flex-1 min-w-[280px] rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-brand"
+        />
+        <button
+          disabled={busy || !url.trim()}
+          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold hover:bg-brand-dark disabled:opacity-60"
+        >
+          {busy ? "Scanning… (up to 60s)" : "Scan with AI"}
+        </button>
+      </form>
+      {err && <div className="text-sm text-red-400">{err}</div>}
+
+      {report && <ScanReportView report={report} />}
+    </div>
+  );
+}
+
+function ScanReportView({ report }: { report: ScanReport }) {
+  if (!report.fetched) {
+    return (
+      <div className="rounded-xl border border-amber-500/40 bg-amber-950/20 p-4 text-sm text-amber-200">
+        <div className="font-semibold">Couldn&apos;t fetch {report.domain}</div>
+        <div className="mt-1 text-amber-200/80">{report.error}</div>
+      </div>
+    );
+  }
+
+  const v = report.verdict;
+  const vColor =
+    v?.verdict === "scam"
+      ? "border-red-500/50 bg-red-950/30 text-red-200"
+      : v?.verdict === "suspicious"
+      ? "border-amber-500/40 bg-amber-950/20 text-amber-200"
+      : "border-emerald-500/40 bg-emerald-950/20 text-emerald-200";
+
+  return (
+    <div className="space-y-5">
+      <div className={`rounded-2xl border p-5 ${vColor}`}>
+        <div className="flex items-baseline justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-widest opacity-80">AI verdict</div>
+            <div className="mt-1 text-2xl font-bold">{v?.verdict ?? "—"}</div>
+          </div>
+          <div className="text-right text-xs opacity-80">
+            <div>Risk {v?.risk_score ?? "—"}/100</div>
+            <div>Confidence {v?.confidence ?? "—"}%</div>
+            <div>Model {v?.model ?? "—"}</div>
+          </div>
+        </div>
+        {v?.mimics_brand && (
+          <div className="mt-3 text-sm">
+            Impersonating: <strong>{v.mimics_brand}</strong>
+          </div>
+        )}
+        {v?.reasons?.length ? (
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm">
+            {v.reasons.map((r, i) => (<li key={i}>{r}</li>))}
+          </ul>
+        ) : null}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-sm">
+          <div className="text-xs uppercase text-zinc-500">Page metadata</div>
+          <dl className="mt-2 space-y-1">
+            <Field label="Domain" value={report.domain} mono />
+            <Field label="Final URL" value={report.final_url} mono />
+            <Field label="HTTP status" value={report.status?.toString()} />
+            <Field label="Title" value={report.title} />
+            <Field
+              label="Domain age"
+              value={
+                report.domain_age_days != null
+                  ? `${report.domain_age_days} days`
+                  : "unknown (RDAP)"
+              }
+            />
+          </dl>
+        </div>
+        {report.screenshot_base64 && (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-2">
+            <img
+              src={`data:image/png;base64,${report.screenshot_base64}`}
+              alt={`Screenshot of ${report.domain}`}
+              className="rounded-lg w-full"
+            />
+          </div>
+        )}
+      </div>
+
+      {report.links && report.links.length > 0 && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <div className="text-xs uppercase text-zinc-500">
+            External domains found ({report.links.length})
+          </div>
+          <table className="mt-3 w-full text-left text-sm">
+            <thead className="text-xs uppercase text-zinc-500">
+              <tr>
+                <th className="px-2 py-1">Domain</th>
+                <th className="px-2 py-1">Cached verdict</th>
+                <th className="px-2 py-1">First seen</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800">
+              {report.links.map((l) => (
+                <tr key={l.domain}>
+                  <td className="px-2 py-1 font-mono">{l.domain}</td>
+                  <td className="px-2 py-1">
+                    {l.cached_verdict ? (
+                      <span
+                        className={
+                          l.cached_verdict.verdict === "scam"
+                            ? "text-red-400"
+                            : l.cached_verdict.verdict === "suspicious"
+                            ? "text-amber-300"
+                            : "text-emerald-300"
+                        }
+                      >
+                        {l.cached_verdict.verdict} ({l.cached_verdict.source ?? "cache"})
+                      </span>
+                    ) : (
+                      <span className="text-zinc-500">unscanned</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1 truncate max-w-[280px] text-zinc-500">
+                    {l.first_seen_href}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {report.html_excerpt && (
+        <details className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <summary className="cursor-pointer text-xs uppercase text-zinc-500">
+            HTML excerpt (first 8 KB)
+          </summary>
+          <pre className="mt-2 overflow-x-auto rounded bg-black/40 p-3 text-xs leading-snug">
+            {report.html_excerpt}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function Field({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
+  return (
+    <div className="flex gap-2">
+      <dt className="w-28 shrink-0 text-zinc-500">{label}</dt>
+      <dd className={mono ? "font-mono break-all" : "break-words"}>{value ?? "—"}</dd>
     </div>
   );
 }
