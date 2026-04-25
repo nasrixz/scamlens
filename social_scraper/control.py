@@ -14,6 +14,8 @@ import structlog
 from aiohttp import web
 
 from .config import Config
+from .extract import extract_urls
+from .threads_client import ThreadsClient
 from .worker import ScrapeWorker
 
 log = structlog.get_logger()
@@ -60,12 +62,41 @@ def build_app(cfg: Config, worker: ScrapeWorker, redis) -> web.Application:
         running = bool(await redis.get(LOCK_KEY))
         return web.json_response({"running": running})
 
+    async def search_handler(request: web.Request) -> web.Response:
+        """Debug helper: run a keyword search and return raw posts +
+        URLs we'd extract. Doesn't touch the scanner or DB."""
+        if not cfg.threads_token:
+            return web.json_response({"error": "no token"}, status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        q = (body.get("q") or "scam").strip()
+        max_pages = int(body.get("max_pages") or 1)
+
+        client = ThreadsClient(cfg.threads_token, search_type=cfg.threads_search_type)
+        out: list[dict] = []
+        async for post in client.keyword_search(q, max_pages=max_pages, page_delay=0.5):
+            urls = extract_urls(post.text)
+            out.append({
+                "id": post.id,
+                "username": post.username,
+                "permalink": post.permalink,
+                "media_type": post.media_type,
+                "is_reply": post.is_reply,
+                "is_quote_post": post.is_quote_post,
+                "text_preview": post.text[:280],
+                "extracted_urls": urls,
+            })
+        return web.json_response({"q": q, "count": len(out), "posts": out})
+
     async def health(_: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
 
     app = web.Application()
     app.router.add_post("/run", run_handler)
     app.router.add_get("/status", status_handler)
+    app.router.add_post("/search", search_handler)
     app.router.add_get("/health", health)
     return app
 

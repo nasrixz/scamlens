@@ -87,6 +87,22 @@ export const adminApi = {
   }),
   scrapeStatus: () =>
     adminFetch<{ running: boolean; runs: ScrapeRun[] }>("/scrape/status"),
+  scrapeSearch: (q: string, max_pages = 1) =>
+    adminFetch<{ q: string; count: number; posts: ScrapeSearchPost[] }>(
+      "/scrape/search",
+      { method: "POST", json: { q, max_pages } },
+    ),
+};
+
+export type ScrapeSearchPost = {
+  id: string;
+  username: string;
+  permalink: string;
+  media_type: string;
+  is_reply: boolean;
+  is_quote_post: boolean;
+  text_preview: string;
+  extracted_urls: string[];
 };
 
 export type ScrapeRun = {

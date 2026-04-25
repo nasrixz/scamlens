@@ -422,6 +422,22 @@ async def admin_scrape_run(
         raise HTTPException(502, f"scraper unreachable: {exc}")
 
 
+@router.post("/scrape/search")
+async def admin_scrape_search(
+    body: dict = Body(default_factory=dict),
+    _: AdminPrincipal = Depends(current_admin),
+):
+    """Debug: run a keyword search via the scraper without scanning. Returns
+    raw posts and the URLs we'd extract. Useful when nothing's getting
+    blocked and you want to see what Threads actually returned."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            resp = await c.post(f"{SCRAPER_URL}/search", json=body)
+        return resp.json()
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"scraper unreachable: {exc}")
+
+
 @router.get("/scrape/status")
 async def admin_scrape_status(
     _: AdminPrincipal = Depends(current_admin),
@@ -441,10 +457,18 @@ async def admin_scrape_status(
         rows = await conn.fetch(
             """
             SELECT id, platform,
-                   to_char(started_at,  'YYYY-MM-DD"T"HH24:MI:SSOF') AS started_at,
-                   to_char(finished_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS finished_at,
+                   started_at  AT TIME ZONE 'UTC' AS started_at,
+                   finished_at AT TIME ZONE 'UTC' AS finished_at,
                    posts_seen, urls_seen, domains_new, domains_blocked, errors
             FROM scrape_runs ORDER BY id DESC LIMIT 10
             """
         )
-    return {"running": running, "runs": [dict(r) for r in rows]}
+    out = []
+    for r in rows:
+        d = dict(r)
+        # asyncpg returns datetime; isoformat keeps ms + 'Z' so JS parses it.
+        for k in ("started_at", "finished_at"):
+            v = d.get(k)
+            d[k] = v.isoformat() + "Z" if v else None
+        out.append(d)
+    return {"running": running, "runs": out}
