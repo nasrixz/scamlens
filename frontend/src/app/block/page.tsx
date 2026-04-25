@@ -1,8 +1,14 @@
-import Link from "next/link";
 import { headers } from "next/headers";
-import { apiGet, type CheckResult } from "@/lib/api";
+import { API_BASE, apiGet, type CheckResult } from "@/lib/api";
 
 type Stats = { total_blocked: number };
+
+// Block page is rendered while the user's browser is on a SCAM domain
+// (e.g. paypa1.com). Any relative href would stay on that scam host and
+// just hit the block-page nginx vhost again. We need an absolute URL to
+// the real ScamLens domain. Derive it from NEXT_PUBLIC_API_URL by
+// stripping the trailing "/api".
+const SITE_URL = API_BASE.replace(/\/api\/?$/, "") || "https://scamlens.vendly.my";
 
 async function lookup(domain: string): Promise<CheckResult | null> {
   try {
@@ -87,18 +93,18 @@ export default async function BlockPage() {
         </div>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <Link
-            href="https://duckduckgo.com"
+          <a
+            href={SITE_URL}
             className="flex items-center justify-center rounded-xl bg-brand px-5 py-3 font-semibold text-white hover:bg-brand-dark"
           >
             ← Take me back to safety
-          </Link>
-          <Link
-            href={`/report?domain=${encodeURIComponent(host || "")}`}
+          </a>
+          <a
+            href={`${SITE_URL}/report?domain=${encodeURIComponent(host || "")}`}
             className="flex items-center justify-center rounded-xl border border-zinc-700 px-5 py-3 font-semibold text-zinc-200 hover:border-zinc-500"
           >
             Report false positive
-          </Link>
+          </a>
         </div>
       </div>
 
