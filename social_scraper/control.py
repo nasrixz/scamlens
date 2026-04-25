@@ -31,11 +31,16 @@ def build_app(cfg: Config, worker: ScrapeWorker, redis) -> web.Application:
         except Exception:
             body = {}
 
+        source = (body.get("source") or "threads").lower()
+        if source not in ("threads", "reddit", "urlhaus"):
+            return web.json_response({"error": f"unknown source: {source}"}, status=400)
+
         keywords: Optional[list[str]] = body.get("keywords")
+        subreddits: Optional[list[str]] = body.get("subreddits")
         duration_min = body.get("duration_minutes")
         max_pages = body.get("max_pages")
 
-        if not cfg.threads_token:
+        if source == "threads" and not cfg.threads_token:
             return web.json_response(
                 {"error": "THREADS_ACCESS_TOKEN not configured on the scraper"},
                 status=503,
@@ -48,15 +53,15 @@ def build_app(cfg: Config, worker: ScrapeWorker, redis) -> web.Application:
                 status=409,
             )
 
-        # Run in background — admin polls /api/admin/scrape/status
-        # and inspects scrape_runs in DB for results.
         asyncio.create_task(_run_safely(
             worker, redis,
+            source=source,
             keywords=keywords,
             duration_min=duration_min,
             max_pages=max_pages,
+            subreddits=subreddits,
         ))
-        return web.json_response({"status": "started"})
+        return web.json_response({"status": "started", "source": source})
 
     async def status_handler(_: web.Request) -> web.Response:
         running = bool(await redis.get(LOCK_KEY))
@@ -104,20 +109,26 @@ def build_app(cfg: Config, worker: ScrapeWorker, redis) -> web.Application:
 async def _run_safely(
     worker: ScrapeWorker,
     redis,
+    source: str,
     keywords: Optional[list[str]],
     duration_min: Optional[int],
     max_pages: Optional[int],
+    subreddits: Optional[list[str]] = None,
 ) -> None:
     try:
         log.info(
             "manual_scrape_start",
+            source=source,
             keywords=(keywords or "default"),
             duration_min=duration_min,
         )
         await worker.run_window(
+            source=source,
             keywords=[k.strip() for k in keywords if k.strip()] if keywords else None,
             duration_minutes=duration_min,
             max_pages=max_pages,
+            subreddits=[s.strip().lstrip("r/").lstrip("/") for s in subreddits if s.strip()]
+                if subreddits else None,
         )
     except Exception as exc:
         log.exception("manual_scrape_failed", error=str(exc))

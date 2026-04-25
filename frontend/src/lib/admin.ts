@@ -78,13 +78,15 @@ export const adminApi = {
   scan: (url: string) =>
     adminFetch<ScanReport>("/scan", { method: "POST", json: { url } }),
   startScrape: (opts: {
+    source?: "threads" | "reddit" | "urlhaus";
     keywords?: string[];
     duration_minutes?: number;
     max_pages?: number;
-  }) => adminFetch<{ status: string; message?: string }>("/scrape", {
-    method: "POST",
-    json: opts,
-  }),
+    subreddits?: string[];
+  }) => adminFetch<{ status: string; source?: string; message?: string }>(
+    "/scrape",
+    { method: "POST", json: opts },
+  ),
   scrapeStatus: () =>
     adminFetch<{ running: boolean; runs: ScrapeRun[] }>("/scrape/status"),
   scrapeSearch: (q: string, max_pages = 1) =>

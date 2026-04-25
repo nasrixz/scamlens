@@ -546,7 +546,9 @@ function Field({ label, value, mono }: { label: string; value?: string; mono?: b
 // -------------------------------- social scrape -----------------------------
 
 function ScrapePanel({ onChange }: { onChange: () => void }) {
+  const [source, setSource] = useState<"threads" | "reddit" | "urlhaus">("threads");
   const [keywords, setKeywords] = useState("");
+  const [subreddits, setSubreddits] = useState("malaysia,MalaysianPF,scams,phishing");
   const [duration, setDuration] = useState<number | "">("");
   const [maxPages, setMaxPages] = useState<number | "">("");
   const [running, setRunning] = useState(false);
@@ -575,12 +577,17 @@ function ScrapePanel({ onChange }: { onChange: () => void }) {
     setErr(null);
     try {
       const opts: {
+        source: "threads" | "reddit" | "urlhaus";
         keywords?: string[];
         duration_minutes?: number;
         max_pages?: number;
-      } = {};
+        subreddits?: string[];
+      } = { source };
       if (keywords.trim()) {
         opts.keywords = keywords.split(",").map((k) => k.trim()).filter(Boolean);
+      }
+      if (source === "reddit" && subreddits.trim()) {
+        opts.subreddits = subreddits.split(",").map((s) => s.trim()).filter(Boolean);
       }
       if (duration !== "") opts.duration_minutes = Number(duration);
       if (maxPages !== "") opts.max_pages = Number(maxPages);
@@ -598,26 +605,69 @@ function ScrapePanel({ onChange }: { onChange: () => void }) {
     <div className="space-y-6">
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
         <div className="text-xs uppercase tracking-wider text-zinc-500">
-          Threads keyword scrape
+          Social scrape
         </div>
         <p className="mt-1 text-sm text-zinc-400">
-          Pulls posts from Threads matching your keywords, extracts URLs, runs
-          each unknown URL through the AI scanner, and adds confirmed scams to
-          the blocklist with the original post linked as the source.
+          Pulls scam URLs from public sources, scans each unknown URL with the
+          AI, and adds confirmed scams to the blocklist with the source post
+          linked. URLhaus URLs are pre-classified — no AI scan needed.
         </p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <div className="md:col-span-3">
-            <label className="block text-xs text-zinc-400">
-              Keywords (comma-separated, optional — defaults to env list)
-            </label>
-            <input
-              value={keywords}
-              onChange={(e) => setKeywords(e.target.value)}
-              placeholder="penipuan, paypal locked, fake bank"
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-brand"
-            />
+            <label className="block text-xs text-zinc-400">Source</label>
+            <div className="mt-1 flex gap-2">
+              {(["threads", "reddit", "urlhaus"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSource(s)}
+                  className={`rounded-lg px-3 py-1.5 text-sm ${
+                    source === s
+                      ? "bg-brand text-white"
+                      : "border border-zinc-700 text-zinc-300 hover:border-zinc-500"
+                  }`}
+                >
+                  {s === "threads" ? "Threads" : s === "reddit" ? "Reddit" : "URLhaus feed"}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-zinc-500">
+              {source === "threads"
+                ? "Threads keyword search. Returns only your own posts unless app is approved for threads_keyword_search."
+                : source === "reddit"
+                ? "Reddit JSON search. Free, no auth. Restrict to subreddits below."
+                : "abuse.ch URLhaus feed of curated malicious URLs. Skips AI; blocks directly."}
+            </p>
           </div>
+
+          {source !== "urlhaus" && (
+            <div className="md:col-span-3">
+              <label className="block text-xs text-zinc-400">
+                Keywords (comma-separated, optional — defaults to env list)
+              </label>
+              <input
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+                placeholder="penipuan, paypal locked, fake bank"
+                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+            </div>
+          )}
+
+          {source === "reddit" && (
+            <div className="md:col-span-3">
+              <label className="block text-xs text-zinc-400">
+                Subreddits (comma-separated, optional — leave blank for all of Reddit)
+              </label>
+              <input
+                value={subreddits}
+                onChange={(e) => setSubreddits(e.target.value)}
+                placeholder="malaysia,MalaysianPF,scams,phishing"
+                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+            </div>
+          )}
           <div>
             <label className="block text-xs text-zinc-400">
               Duration minutes (optional)
@@ -667,6 +717,7 @@ function ScrapePanel({ onChange }: { onChange: () => void }) {
           <thead className="text-xs uppercase text-zinc-500">
             <tr>
               <th className="px-2 py-1">Started</th>
+              <th className="px-2 py-1">Source</th>
               <th className="px-2 py-1">Duration</th>
               <th className="px-2 py-1 text-right">Posts</th>
               <th className="px-2 py-1 text-right">URLs</th>
@@ -685,6 +736,7 @@ function ScrapePanel({ onChange }: { onChange: () => void }) {
                   <td className="px-2 py-1 text-zinc-400">
                     {start.toLocaleString()}
                   </td>
+                  <td className="px-2 py-1 text-zinc-300">{r.platform}</td>
                   <td className="px-2 py-1 text-zinc-400">
                     {dur != null ? `${dur} min` : "—"}
                   </td>
@@ -702,7 +754,7 @@ function ScrapePanel({ onChange }: { onChange: () => void }) {
             })}
             {runs.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-2 py-6 text-center text-zinc-500">
+                <td colSpan={8} className="px-2 py-6 text-center text-zinc-500">
                   No scrape runs yet.
                 </td>
               </tr>

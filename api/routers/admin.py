@@ -391,9 +391,11 @@ async def admin_scan(
 # ------------------------------- scraper -------------------------------------
 
 class ScrapeRequest(BaseModel):
+    source: Optional[str] = "threads"        # threads | reddit | urlhaus
     keywords: Optional[list[str]] = None
     duration_minutes: Optional[int] = None
     max_pages: Optional[int] = None
+    subreddits: Optional[list[str]] = None    # reddit only
 
 
 @router.post("/scrape")
@@ -408,9 +410,11 @@ async def admin_scrape_run(
             resp = await c.post(
                 f"{SCRAPER_URL}/run",
                 json={
+                    "source": body.source,
                     "keywords": body.keywords,
                     "duration_minutes": body.duration_minutes,
                     "max_pages": body.max_pages,
+                    "subreddits": body.subreddits,
                 },
             )
         if resp.status_code == 409:

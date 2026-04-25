@@ -1,8 +1,15 @@
-"""Per-keyword scrape pass: pull posts → extract URLs → classify → block."""
+"""Per-keyword scrape pass: pull posts → extract URLs → classify → block.
+
+Supports three sources:
+  threads — Threads keyword search (requires App Review for public results)
+  reddit  — Reddit JSON search (free, no auth)
+  urlhaus — abuse.ch curated malicious-URL feed (no AI scan needed)
+"""
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 import asyncpg
 import httpx
@@ -11,7 +18,9 @@ from redis.asyncio import Redis
 
 from .config import Config
 from .extract import extract_urls, url_to_domain
+from .reddit_client import RedditClient, RedditPost
 from .threads_client import ThreadsClient, ThreadsPost
+from .urlhaus_client import URLhausClient
 
 log = structlog.get_logger()
 
@@ -31,15 +40,31 @@ class ScrapeWorker:
         self._pool = pool
         self._redis = redis
         self._client = client
+        self._reddit = RedditClient()
+        self._urlhaus = URLhausClient()
 
     async def run_window(
         self,
+        source: str = "threads",
         keywords: list[str] | None = None,
         duration_minutes: int | None = None,
         max_pages: int | None = None,
+        subreddits: list[str] | None = None,
     ) -> RunStats:
-        """Run one scrape window. Optional overrides let the admin /run
-        endpoint trigger a custom-scoped pass without touching the cron loop."""
+        """Dispatch to the named source. `source` ∈ {threads, reddit, urlhaus}.
+        Optional overrides let admin /run trigger custom-scoped passes."""
+        if source == "urlhaus":
+            return await self._run_urlhaus()
+        if source == "reddit":
+            return await self._run_reddit(keywords, duration_minutes, max_pages, subreddits)
+        return await self._run_threads(keywords, duration_minutes, max_pages)
+
+    async def _run_threads(
+        self,
+        keywords: list[str] | None,
+        duration_minutes: int | None,
+        max_pages: int | None,
+    ) -> RunStats:
         kws = keywords if keywords is not None else self._cfg.keywords
         budget_min = duration_minutes if duration_minutes is not None else self._cfg.duration_minutes
         pages = max_pages if max_pages is not None else self._cfg.max_pages_per_keyword
@@ -52,7 +77,7 @@ class ScrapeWorker:
             for keyword in kws:
                 if time.time() >= deadline:
                     break
-                log.info("scrape_keyword_start", keyword=keyword)
+                log.info("scrape_keyword_start", source="threads", keyword=keyword)
                 try:
                     async for post in self._client.keyword_search(
                         keyword,
@@ -68,8 +93,74 @@ class ScrapeWorker:
                     stats.errors += 1
         finally:
             await self._finish_run(run_id, stats)
+        log.info("scrape_window_done", source="threads", **stats.__dict__)
+        return stats
 
-        log.info("scrape_window_done", **stats.__dict__)
+    async def _run_reddit(
+        self,
+        keywords: list[str] | None,
+        duration_minutes: int | None,
+        max_pages: int | None,
+        subreddits: list[str] | None,
+    ) -> RunStats:
+        kws = keywords if keywords is not None else self._cfg.keywords
+        budget_min = duration_minutes if duration_minutes is not None else self._cfg.duration_minutes
+        pages = max_pages if max_pages is not None else self._cfg.max_pages_per_keyword
+
+        stats = RunStats()
+        deadline = time.time() + budget_min * 60
+        run_id = await self._start_run("reddit")
+
+        try:
+            for keyword in kws:
+                if time.time() >= deadline:
+                    break
+                log.info("scrape_keyword_start", source="reddit", keyword=keyword)
+                try:
+                    async for post in self._reddit.search(
+                        keyword,
+                        subreddits=subreddits,
+                        max_pages=pages,
+                        page_delay=self._cfg.request_delay_seconds,
+                    ):
+                        if time.time() >= deadline:
+                            break
+                        stats.posts_seen += 1
+                        await self._handle_reddit_post(post, stats)
+                except Exception as exc:
+                    log.warning("reddit_search_failed", keyword=keyword, error=str(exc)[:200])
+                    stats.errors += 1
+        finally:
+            await self._finish_run(run_id, stats)
+        log.info("scrape_window_done", source="reddit", **stats.__dict__)
+        return stats
+
+    async def _run_urlhaus(self) -> RunStats:
+        stats = RunStats()
+        run_id = await self._start_run("urlhaus")
+        try:
+            async for entry in self._urlhaus.recent():
+                stats.urls_seen += 1
+                domain = url_to_domain(entry.url)
+                if not domain or "." not in domain:
+                    continue
+                if await self._already_known(domain):
+                    continue
+                stats.domains_new += 1
+                # URLhaus has already classified — promote without AI.
+                await self._promote_to_blocklist(
+                    domain=domain,
+                    source_post=entry.reference or entry.url,
+                    platform="urlhaus",
+                    reason=[entry.threat or "urlhaus-flagged"],
+                )
+                stats.domains_blocked += 1
+        except Exception as exc:
+            log.warning("urlhaus_failed", error=str(exc)[:200])
+            stats.errors += 1
+        finally:
+            await self._finish_run(run_id, stats)
+        log.info("scrape_window_done", source="urlhaus", **stats.__dict__)
         return stats
 
     async def _handle_post(self, post: ThreadsPost, stats: RunStats) -> None:
@@ -102,6 +193,44 @@ class ScrapeWorker:
                     domain=domain,
                     source_post=post.permalink,
                     platform="threads",
+                    reason=v.get("reasons") or [],
+                )
+                stats.domains_blocked += 1
+
+    async def _handle_reddit_post(self, post: RedditPost, stats: RunStats) -> None:
+        """Reddit posts have two URL sources: the `url` field (the external
+        link the OP posted, often the actual scam) and `selftext` (markdown
+        body that may also contain links)."""
+        candidates: list[str] = []
+        # Self-post 'url' just points back to reddit.com — skip those.
+        if post.url and "reddit.com" not in (post.url or ""):
+            candidates.append(post.url)
+        candidates.extend(extract_urls(post.title))
+        candidates.extend(extract_urls(post.selftext))
+
+        # Dedupe.
+        seen: set[str] = set()
+        for url in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            stats.urls_seen += 1
+            domain = url_to_domain(url)
+            if not domain or "." not in domain:
+                continue
+            if await self._already_known(domain):
+                continue
+            stats.domains_new += 1
+            verdict = await self._classify(url)
+            if not verdict:
+                continue
+            v = verdict.get("verdict", {}) or {}
+            if (v.get("verdict") == "scam"
+                    and (v.get("confidence") or 0) >= self._cfg.confidence_threshold):
+                await self._promote_to_blocklist(
+                    domain=domain,
+                    source_post=post.permalink,
+                    platform="reddit",
                     reason=v.get("reasons") or [],
                 )
                 stats.domains_blocked += 1
