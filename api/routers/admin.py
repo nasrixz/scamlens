@@ -18,7 +18,7 @@ from ..auth import (
     touch_last_login,
     verify_password,
 )
-from ..deps import get_cfg, get_pool
+from ..deps import get_cfg, get_pool, get_redis
 from ..rate_limit import limiter
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -240,17 +240,24 @@ async def add_blocklist(
     body: DomainEntry,
     who: AdminPrincipal = Depends(current_admin),
     pool=Depends(get_pool),
+    redis=Depends(get_redis),
 ):
+    """Atomically:
+      - insert into blocklist_seed
+      - remove from whitelist (block wins when admin is explicit)
+      - clear any cached 'safe' verdict so the next DNS query blocks
+    """
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO blocklist_seed (domain, category) VALUES ($1, $2)
-            ON CONFLICT (domain) DO NOTHING
-            """,
-            body.domain, body.reason or "manual",
-        )
-        # Remove from whitelist if present (admin is explicit: block wins)
-        await conn.execute("DELETE FROM whitelist WHERE domain=$1", body.domain)
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO blocklist_seed (domain, category) VALUES ($1, $2)
+                ON CONFLICT (domain) DO NOTHING
+                """,
+                body.domain, body.reason or "manual",
+            )
+            await conn.execute("DELETE FROM whitelist WHERE domain=$1", body.domain)
+    await redis.delete(f"verdict:{body.domain}", f"deep:{body.domain}")
     return {"domain": body.domain, "added_by": who.email}
 
 
@@ -259,10 +266,22 @@ async def remove_blocklist(
     domain: str,
     _: AdminPrincipal = Depends(current_admin),
     pool=Depends(get_pool),
+    redis=Depends(get_redis),
 ):
+    """Remove from blocklist + invalidate Redis verdict + delete pending
+    deep-scan cache. Without these the DNS resolver would re-block the
+    domain off a stale 'scam' verdict for up to the cache TTL (7 days)."""
     domain = domain.strip().lower().rstrip(".")
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM blocklist_seed WHERE domain=$1", domain)
+        # Down-classify any AI 'scam' verdict left in domain_verdicts so
+        # the DNS resolver's blocklist-refresh union doesn't pull it back.
+        await conn.execute(
+            "UPDATE domain_verdicts SET verdict='safe' "
+            "WHERE domain=$1 AND verdict IN ('scam','suspicious')",
+            domain,
+        )
+    await redis.delete(f"verdict:{domain}", f"deep:{domain}")
     return {"removed": domain}
 
 
@@ -287,16 +306,32 @@ async def add_whitelist(
     body: DomainEntry,
     who: AdminPrincipal = Depends(current_admin),
     pool=Depends(get_pool),
+    redis=Depends(get_redis),
 ):
+    """Whitelist always wins. Atomically:
+      - upsert whitelist row
+      - delete from blocklist_seed (admin override)
+      - down-classify any AI 'scam' verdict in domain_verdicts
+      - clear Redis verdict + deep-scan caches"""
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO whitelist (domain, reason, added_by) VALUES ($1, $2, $3)
-            ON CONFLICT (domain) DO UPDATE SET reason=EXCLUDED.reason, added_by=EXCLUDED.added_by
-            """,
-            body.domain, body.reason, who.email,
-        )
-        await conn.execute("DELETE FROM blocklist_seed WHERE domain=$1", body.domain)
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO whitelist (domain, reason, added_by) VALUES ($1, $2, $3)
+                ON CONFLICT (domain) DO UPDATE
+                  SET reason=EXCLUDED.reason, added_by=EXCLUDED.added_by
+                """,
+                body.domain, body.reason, who.email,
+            )
+            await conn.execute(
+                "DELETE FROM blocklist_seed WHERE domain=$1", body.domain,
+            )
+            await conn.execute(
+                "UPDATE domain_verdicts SET verdict='safe' "
+                "WHERE domain=$1 AND verdict IN ('scam','suspicious')",
+                body.domain,
+            )
+    await redis.delete(f"verdict:{body.domain}", f"deep:{body.domain}")
     return {"domain": body.domain, "added_by": who.email}
 
 
@@ -305,10 +340,13 @@ async def remove_whitelist(
     domain: str,
     _: AdminPrincipal = Depends(current_admin),
     pool=Depends(get_pool),
+    redis=Depends(get_redis),
 ):
+    """Remove + force re-evaluation by clearing cached verdicts."""
     domain = domain.strip().lower().rstrip(".")
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM whitelist WHERE domain=$1", domain)
+    await redis.delete(f"verdict:{domain}", f"deep:{domain}")
     return {"removed": domain}
 
 

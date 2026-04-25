@@ -156,6 +156,14 @@ class Resolver:
             mimics_brand=None,
             client_ip=client_ip,
         ))
+        # Every block must end up visible in the admin Blocklist tab so the
+        # operator can audit + override via whitelist. Source 'blocklist'
+        # already came from blocklist_seed; everything else (cache/ai/etc.)
+        # gets promoted with a descriptive category.
+        if verdict.source != "blocklist":
+            asyncio.create_task(
+                self._db.promote_to_blocklist(domain, _category_for(verdict))
+            )
         log.info("blocked", domain=domain, verdict=verdict.verdict, source=verdict.source)
         return ResolveResult(
             wire=reply.pack(), blocked=True, domain=domain, verdict=verdict,
@@ -249,6 +257,23 @@ class Resolver:
         except Exception as exc:
             log.info("resolve_scam_ip_failed", domain=domain, error=str(exc)[:120])
         return None
+
+
+def _category_for(verdict: Verdict) -> str:
+    """Map a verdict to a blocklist_seed category. Keeps audit trail readable."""
+    src = (verdict.source or "").lower()
+    if src == "ai":
+        return "ai-confirmed"
+    if src == "scan_error":
+        return "ai-scan-error"
+    if src == "typosquat":
+        return "typosquat"
+    if src == "cache":
+        # Older cached verdicts that lost their original source label.
+        return f"cache-{verdict.verdict}"
+    if src == "user_report":
+        return "user-report"
+    return src or "auto"
 
 
 def _is_bypass(domain: str) -> bool:
