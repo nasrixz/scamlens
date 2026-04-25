@@ -116,11 +116,12 @@ async def _blocklist_match(pool, domain: str) -> Optional[str]:
 
 
 async def _latest_resolved_ip(pool, domain: str) -> Optional[str]:
-    """Return the resolved_ip from the latest blocked_attempts row."""
+    """Return the resolved_ip from the latest blocked_attempts row.
+    `host()` strips the /32 (or /128) suffix Postgres adds for INET."""
     async with pool.acquire() as conn:
         return await conn.fetchval(
             """
-            SELECT resolved_ip::text FROM blocked_attempts
+            SELECT host(resolved_ip) FROM blocked_attempts
             WHERE domain = $1 AND resolved_ip IS NOT NULL
             ORDER BY created_at DESC LIMIT 1
             """,
