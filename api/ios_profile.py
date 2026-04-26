@@ -51,8 +51,8 @@ def build_profile(spec: ProfileSpec) -> bytes:
 
     dns_settings: dict = {"DNSProtocol": spec.protocol}
     if spec.protocol == "HTTPS":
-        token_suffix = f"/{spec.doh_token}" if spec.doh_token else ""
-        dns_settings["ServerURL"] = f"https://{spec.dns_hostname}{spec.doh_path}{token_suffix}"
+        host = f"{spec.doh_token}.{spec.dns_hostname}" if spec.doh_token else spec.dns_hostname
+        dns_settings["ServerURL"] = f"https://{host}{spec.doh_path}"
     else:  # TLS
         dns_settings["ServerName"] = spec.dns_hostname
     if spec.server_addresses:

@@ -39,6 +39,7 @@ export type User = {
   role: "user" | "admin";
   invite_code: string;
   doh_token?: string;
+  dns_hostname?: string;
 };
 
 export type Link = {

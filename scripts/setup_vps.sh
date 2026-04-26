@@ -172,18 +172,38 @@ EOF
   rm -f "$NGINX_LINK" # swap out main config during bootstrap
   nginx -t && systemctl reload nginx
 
-  for host in "$DOMAIN" "$DNS_HOSTNAME"; do
-    if [[ -d "/etc/letsencrypt/live/$host" ]]; then
-      log "Cert for $host already present."
-      continue
-    fi
-    log "Requesting cert for $host…"
+  # Main domain: HTTP-01 webroot (no wildcard needed).
+  if [[ -d "/etc/letsencrypt/live/$DOMAIN" ]]; then
+    log "Cert for $DOMAIN already present."
+  else
+    log "Requesting cert for $DOMAIN…"
     certbot certonly \
       --webroot -w "$CERTBOT_WEBROOT" \
       --non-interactive --agree-tos \
       --email "$LE_EMAIL" \
-      -d "$host"
-  done
+      -d "$DOMAIN"
+  fi
+
+  # DNS hostname: wildcard via Cloudflare DNS-01 (covers per-user subdomains).
+  if [[ -d "/etc/letsencrypt/live/$DNS_HOSTNAME" ]]; then
+    log "Cert for $DNS_HOSTNAME (+ wildcard) already present."
+  else
+    if [[ ! -f /etc/letsencrypt/cloudflare.ini ]]; then
+      err "Missing /etc/letsencrypt/cloudflare.ini — create with:"
+      err "  dns_cloudflare_api_token = <CF_TOKEN_WITH_DNS_EDIT_FOR_ZONE>"
+      err "  chmod 600 /etc/letsencrypt/cloudflare.ini"
+      exit 1
+    fi
+    apt-get install -y python3-certbot-dns-cloudflare
+    log "Requesting wildcard cert for $DNS_HOSTNAME + *.${DNS_HOSTNAME}…"
+    certbot certonly \
+      --dns-cloudflare \
+      --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
+      --dns-cloudflare-propagation-seconds 30 \
+      --non-interactive --agree-tos \
+      --email "$LE_EMAIL" \
+      -d "$DNS_HOSTNAME" -d "*.${DNS_HOSTNAME}"
+  fi
 
   # Remove bootstrap, enable real config
   rm -f /etc/nginx/sites-enabled/scamlens-bootstrap.conf

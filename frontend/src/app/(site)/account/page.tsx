@@ -145,7 +145,7 @@ export default function AccountPage() {
           </div>
           <div className="mt-2">
             <code className="select-all break-all rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-mono block">
-              https://scamlens.vendly.my/dns-query/{me.doh_token}
+              https://{me.doh_token}.{me.dns_hostname ?? "dns.vendly.my"}/dns-query
             </code>
           </div>
           <p className="mt-2 text-xs text-zinc-500">

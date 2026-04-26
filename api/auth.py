@@ -56,8 +56,8 @@ def new_invite_code(length: int = 8) -> str:
 
 
 def new_doh_token() -> str:
-    """64-char URL-safe random suitable for the per-user DoH path."""
-    return secrets.token_urlsafe(48)
+    """48-char hex (DNS-label safe) for per-user DoH subdomain."""
+    return secrets.token_hex(24)
 
 
 # ----------------------------- jwt helpers ----------------------------------

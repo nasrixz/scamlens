@@ -119,11 +119,12 @@ async def logout(response: Response, _=Depends(current_principal)):
 
 
 @router.get("/me")
-async def me(who: Principal = Depends(current_principal)):
+async def me(who: Principal = Depends(current_principal), cfg=Depends(get_cfg)):
     return {
         "id": who.id,
         "email": who.email,
         "role": who.role,
         "invite_code": who.invite_code,
         "doh_token": who.doh_token,
+        "dns_hostname": cfg.dns_hostname,
     }
