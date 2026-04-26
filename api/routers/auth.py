@@ -1,5 +1,4 @@
 """/api/auth/* — registration + login for end users."""
-from __future__ import annotations
 
 import re
 
